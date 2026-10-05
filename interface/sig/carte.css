@@ -232,7 +232,7 @@ p.sig-etiquette { margin: 0 0 6px; }
   display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
   color: var(--sig-bleu); margin-bottom: 2px;
 }
-.sig-fiche__titre { margin: 0; font-size: 17px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--sig-encre); overflow-wrap: anywhere; }
+.sig-app .sig-fiche__titre { margin: 0; font-size: 17px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--sig-encre); overflow-wrap: anywhere; }
 .sig-fiche__actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 10px 0 4px; }
 .sig-dl { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 3px 12px; margin: 6px 0; }
 .sig-dl dt { color: var(--sig-gris); }
