@@ -279,3 +279,76 @@ p.sig-etiquette { margin: 0 0 6px; }
   .sig-entete__sous { display: none; }
   .sig-pied__vue { display: none; }
 }
+
+/* ---------- arborescence des maquettes (lot 4) ---------- */
+.sig-arbre { list-style: none; margin: 0; padding: 0; }
+.sig-arbre__tete { display: flex; align-items: center; gap: 4px; min-height: 30px; border-bottom: 1px solid var(--sig-trait-2); }
+.sig-arbre__tete:hover { background: var(--sig-fond-2); }
+.sig-arbre__chevron {
+  display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0;
+  background: none; color: var(--sig-gris); cursor: pointer; flex: none;
+}
+.sig-arbre__chevron .sig-icone { transform: rotate(-90deg); transition: transform .15s; }
+.sig-arbre__chevron--ouvert .sig-icone { transform: none; }
+.sig-arbre__groupe {
+  flex: 1; min-width: 0; text-align: left; font: inherit; font-weight: 600; padding: 4px 0; border: 0; background: none;
+  color: var(--sig-encre); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sig-arbre__groupe--lot { font-weight: 500; color: var(--sig-bleu-fonce); font-variant: small-caps; letter-spacing: .03em; }
+.sig-arbre__compte { color: var(--sig-gris); font-size: 11.5px; white-space: nowrap; }
+.sig-arbre__actions { display: inline-flex; flex: none; }
+.sig-arbre__actions .sig-bouton-icone, .sig-arbre__ligne .sig-bouton-icone { width: 26px; height: 26px; }
+.sig-arbre__feuille { border-bottom: 1px solid var(--sig-trait-2); }
+.sig-arbre__feuille:hover { background: var(--sig-fond-2); }
+.sig-arbre__feuille--choisie { background: var(--sig-bleu-clair); box-shadow: inset 3px 0 0 var(--sig-bleu); }
+.sig-arbre__ligne { display: flex; align-items: center; gap: 4px; min-height: 30px; padding-right: 2px; }
+.sig-arbre__vide { width: 26px; flex: none; }
+.sig-arbre__nom {
+  flex: 1; min-width: 0; font: inherit; text-align: left; padding: 3px 0; border: 0; background: none; color: var(--sig-encre);
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sig-arbre__nom:hover { color: var(--sig-bleu); text-decoration: underline; }
+.sig-arbre__info { color: var(--sig-gris); font-size: 11px; white-space: nowrap; }
+.sig-arbre__progression { color: var(--sig-gris); font-size: 11px; padding: 0 0 4px 30px; }
+.sig-arbre .sig-progression { margin: 0 4px 4px 30px; }
+
+/* ---------- plan des locaux ---------- */
+.sig-locaux__tete { margin: 0 0 8px; overflow-wrap: anywhere; }
+.sig-niveaux { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; border: 1px solid var(--sig-trait-2); border-radius: 3px; padding: 2px; }
+.sig-niveau {
+  display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 8px; padding: 5px 8px; border: 0;
+  border-radius: 2px; background: none; font: inherit; text-align: left; cursor: pointer; color: var(--sig-encre);
+}
+.sig-niveau:hover { background: var(--sig-survol); }
+.sig-niveau--actif { background: var(--sig-bleu); color: #fff; }
+.sig-niveau--actif:hover { background: var(--sig-bleu-fonce); }
+.sig-niveau__nom { font-weight: 600; }
+.sig-niveau__intitule { color: inherit; opacity: .75; font-size: 12px; }
+.sig-niveau__nb { font-size: 11px; font-variant-numeric: tabular-nums; opacity: .8; }
+.sig-options { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin: 10px 0 4px; }
+.sig-option { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.sig-legende { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; font-size: 12px; }
+.sig-legende li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sig-legende li > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-legende__pastille { width: 12px; height: 12px; flex: none; border-radius: 2px; border: 1px solid rgba(0,0,0,.25); display: inline-block; }
+.sig-locaux__liste { list-style: none; padding: 0; margin: 6px 0 0; }
+.sig-local {
+  display: grid; grid-template-columns: 12px minmax(0, 1.2fr) minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%;
+  padding: 5px 4px; border: 0; border-bottom: 1px solid var(--sig-trait-2); background: none; font: inherit; text-align: left;
+  cursor: pointer; color: var(--sig-encre);
+}
+.sig-local:hover { background: var(--sig-bleu-clair); }
+.sig-local--actif { background: #fdf0d0; box-shadow: inset 3px 0 0 var(--sig-or); }
+.sig-local__code { font-weight: 500; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-local__nom { color: var(--sig-gris); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-local__surface { font-size: 11.5px; color: var(--sig-encre-2); font-variant-numeric: tabular-nums; }
+.sig-local__typologie { display: flex; align-items: center; gap: 6px; margin: 2px 0 8px; }
+
+/* ---------- interrogation croisée ---------- */
+.sig-croisement { margin-top: 6px; }
+.sig-croisement__resultats { margin-top: 8px; }
+.sig-croisement__tete { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 12px; color: var(--sig-encre-2); }
+.sig-croisement__liste { list-style: none; padding: 4px 8px; margin: 0; }
+.sig-croisement__liste li { padding: 3px 0; border-bottom: 1px solid var(--sig-trait-2); }
+.sig-croisement__liste li:last-child { border-bottom: 0; }
+a.sig-bouton { text-decoration: none; display: inline-block; }

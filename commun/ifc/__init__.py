@@ -6,14 +6,15 @@ Contenu :
 - lecture : ouverture contrôlée, métadonnées, données brutes de géoréférencement ;
 - georef : interprétation du géoréférencement (IfcMapConversion, IfcSite projeté ou latitude/longitude, manuel) ;
 - geometrie : modèle 3D GLB et emprise au sol en une lecture ;
-- proprietes : Psets génériques et index SQLite des objets (consultation sans rouvrir la maquette).
-Prévu au lot 4 : locaux (IfcSpace) et « Données d'identification ».
+- proprietes : Psets génériques et index SQLite des objets (consultation sans rouvrir la maquette) ;
+- locaux : IfcSpace (codes « Données d'identification » SGP_DI_*, niveau, emprise au sol, altitudes).
 """
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
 VERSION_MODULE = "0.2.0"
+VERSION_LOCAUX = "1"   # version de l'extraction des locaux (cache séparé de la 3D)
 
 
 def version_ifcopenshell() -> str | None:

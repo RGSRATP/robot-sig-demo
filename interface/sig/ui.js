@@ -20,6 +20,7 @@ const TRACES = {
   haut: 'M6 15l6-6 6 6',
   bas: 'M6 9l6 6 6-6',
   plein: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
+  plan: 'M3.5 3.5h17v17h-17z M3.5 11h8 M11.5 3.5v4 M11.5 11v9.5 M15 11h5.5 M15 11v4',
 };
 
 export function icone(nom, taille = 20) {

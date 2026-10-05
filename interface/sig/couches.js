@@ -27,21 +27,27 @@ function idsCalques(c) {
   return ['pt', 'ln', 'fl', 'ol'].map((s) => `sig-${c.id}-${s}`);
 }
 
+// Objets trouvés par une interrogation croisée : état « resultat » de l'entité, surligné en or.
+const RESULTAT = ['boolean', ['feature-state', 'resultat'], false];
+const OR = '#E8B400';
+const siResultat = (oui, non) => ['case', RESULTAT, oui, non];
+
 function calques(c) {
   const s = c.style;
   const src = `sig-src-${c.id}`;
   const op = (base) => base ?? 0.9;
   return [
     { id: `sig-${c.id}-fl`, type: 'fill', source: src, filter: FILTRES.fl,
-      paint: { 'fill-color': s.couleur, 'fill-opacity': op(s.opacite) } },
+      paint: { 'fill-color': siResultat(OR, s.couleur), 'fill-opacity': op(s.opacite) } },
     { id: `sig-${c.id}-ol`, type: 'line', source: src, filter: FILTRES.fl,
-      paint: { 'line-color': s.contour || s.couleur, 'line-width': s.epaisseur ?? 1, 'line-opacity': 1 } },
+      paint: { 'line-color': siResultat(OR, s.contour || s.couleur), 'line-width': siResultat(3, s.epaisseur ?? 1), 'line-opacity': 1 } },
     { id: `sig-${c.id}-ln`, type: 'line', source: src, filter: FILTRES.ln,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': s.couleur, 'line-width': s.epaisseur ?? 2, 'line-opacity': op(s.opacite) } },
+      paint: { 'line-color': siResultat(OR, s.couleur), 'line-width': siResultat((s.epaisseur ?? 2) + 3, s.epaisseur ?? 2),
+               'line-opacity': op(s.opacite) } },
     { id: `sig-${c.id}-pt`, type: 'circle', source: src, filter: FILTRES.pt,
-      paint: { 'circle-color': s.couleur, 'circle-radius': s.rayon ?? 5, 'circle-opacity': op(s.opacite),
-               'circle-stroke-color': s.contour || '#ffffff', 'circle-stroke-width': s.epaisseur_contour ?? 1,
+      paint: { 'circle-color': s.couleur, 'circle-radius': siResultat((s.rayon ?? 5) + 2, s.rayon ?? 5), 'circle-opacity': op(s.opacite),
+               'circle-stroke-color': siResultat(OR, s.contour || '#ffffff'), 'circle-stroke-width': siResultat(3, s.epaisseur_contour ?? 1),
                'circle-stroke-opacity': op(s.opacite) } },
   ];
 }
@@ -65,8 +71,11 @@ const PROPRIETES_OPACITE = {
 
 export class GestionnaireCouches {
   // panneaux : { couches, recherche, anomalies } ; surAnomalies(n) : nombre d'anomalies (badge)
-  constructor(carte, panneaux, styleSelection, { surAnomalies } = {}) {
+  // complementsFiche(couche, n) : sections ajoutées à la fiche d'un objet (interrogation croisée)
+  constructor(carte, panneaux, styleSelection, { surAnomalies, complementsFiche } = {}) {
     this.carte = carte;
+    this.complementsFiche = complementsFiche || (() => []);
+    this.resultats = [];    // [{ source, id }] surlignés
     this.panneau = panneaux.couches;
     this.panneaux = panneaux;
     this.surAnomalies = surAnomalies || (() => {});
@@ -201,10 +210,46 @@ export class GestionnaireCouches {
       const fiche = await lire(`couches/${id}/objets/${n}`);
       this.carte.getSource('sig-selection').setData({ type: 'Feature', geometry: fiche.geometrie_wgs84, properties: {} });
       if (zoomer) this.zoomerSur(fiche.emprise_wgs84, 17);
-      afficherFiche(fiche, etat.couche, () => this.deselectionner(false));
+      afficherFiche(fiche, etat.couche, () => this.deselectionner(false), this.complementsFiche(etat.couche, n));
     } catch (e) {
       afficherFiche({ erreur: e.message }, etat.couche, () => this.deselectionner(false));
     }
+  }
+
+  /** Identifiants des couches affichées (pour l'interrogation croisée). */
+  visibles() {
+    return this.ordre.filter((id) => this.etats.get(id).visible);
+  }
+
+  libelle(id) {
+    return this.etats.get(id)?.couche.libelle;
+  }
+
+  /** Surligne les objets trouvés ; affiche et charge leurs couches si besoin. */
+  surlignerResultats(groupes) {
+    this.effacerResultats();
+    for (const g of groupes) {
+      const etat = this.etats.get(g.couche);
+      if (!etat) continue;
+      if (!etat.visible) {
+        etat.visible = true;
+        this._appliquerVisibilite(g.couche);
+        this._charger(g.couche);
+        this._rendre();
+      }
+      for (const o of g.objets) {
+        const cle = { source: `sig-src-${g.couche}`, id: o.n };
+        this.carte.setFeatureState(cle, { resultat: true });
+        this.resultats.push(cle);
+      }
+    }
+  }
+
+  effacerResultats() {
+    for (const cle of this.resultats) {
+      if (this.carte.getSource(cle.source)) this.carte.removeFeatureState(cle, 'resultat');
+    }
+    this.resultats = [];
   }
 
   deselectionner(fermer = true) {

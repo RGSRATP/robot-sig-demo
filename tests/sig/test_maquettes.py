@@ -29,7 +29,8 @@ def cache_traite(tmp_path_factory):
     t = cfgm["traitement"]
     for id_, _rel, chemin in maq.fichiers(cfgm):
         sortie = maq.dossier_cache(cfgm, id_)
-        params = {"cle": maq.cle_traitement(chemin, cfgm), "exclure": t["exclure"],
+        params = {"cle": maq.cle_traitement(chemin, cfgm), "cle_locaux": maq.cle_locaux(chemin, cfgm), "tache": "complet",
+                  "exclure": t["exclure"],
                   "deflexion_lineaire_m": t["deflexion_lineaire_m"], "simplification_emprise_m": t["simplification_emprise_m"]}
         p = sortie / "parametres.json"
         sortie.mkdir(parents=True, exist_ok=True)
@@ -186,8 +187,9 @@ def test_file_de_traitement_sous_processus(cfgm, tmp_path):
 
     def diagnostic(m):
         d = maq.dossier_cache(cfgm, m[0])
-        return {n: (d / n).read_text(encoding="utf-8", errors="replace")[-800:]
-                for n in ("erreur.json", "journal.txt", "trace.txt") if (d / n).is_file()}
+        return {"historique": file.historique, "fichiers": sorted(p.name for p in d.iterdir()),
+                **{n: (d / n).read_text(encoding="utf-8", errors="replace")[-800:]
+                   for n in ("erreur.json", "journal.txt", "trace.txt") if (d / n).is_file()}}
 
     assert maq.resultat(cfgm, ok[0], maq.cle_traitement(ok[2], cfgm)) is not None, diagnostic(ok)
     assert (maq.dossier_cache(cfgm, ok[0]) / "modele.glb").is_file()

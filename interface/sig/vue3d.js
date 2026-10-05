@@ -12,6 +12,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MercatorCoordinate } from 'maplibre-gl';
 
 const COULEUR_SELECTION = 0xe8b400;
+const COULEUR_CONTOUR_PLAN = 0x2b3137;
 const MOTIF_GUID = /^[0-9A-Za-z_$]{22}$/;
 
 export class CoucheMaquettes3D {
@@ -24,11 +25,17 @@ export class CoucheMaquettes3D {
     this.coupe = null;          // hauteur (m au-dessus du terrain) au-dessus de laquelle on coupe
     this.selection = null;      // { id, guid, meshes, materiaux }
     this.isole = null;          // id de la maquette isolée
+    this.attenuation = 1;       // facteur d'opacité commun (plan des locaux : maquettes atténuées)
     this.matSelection = new THREE.MeshStandardMaterial({
       color: COULEUR_SELECTION, emissive: COULEUR_SELECTION, emissiveIntensity: 0.45,
       roughness: 0.6, side: THREE.DoubleSide, flatShading: true,
     });
     this.chargeur = new GLTFLoader();
+    this.plan = null;           // { id, groupe, volume } : plan des locaux d'un niveau
+    this.matContour = new THREE.LineBasicMaterial({ color: COULEUR_CONTOUR_PLAN, transparent: true, opacity: 0.9 });
+    this.matVolume = new THREE.MeshBasicMaterial({ color: COULEUR_SELECTION, transparent: true, opacity: 0.38,
+      depthWrite: false, side: THREE.DoubleSide });
+    this.matVolumeArete = new THREE.LineBasicMaterial({ color: 0x8a6a00 });
   }
 
   onAdd(carte, gl) {
@@ -42,7 +49,7 @@ export class CoucheMaquettes3D {
     this.renderer = new THREE.WebGLRenderer({ canvas: carte.getCanvas(), context: gl, antialias: true });
     this.renderer.autoClear = false;
     this.renderer.localClippingEnabled = true;
-    this.plan = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+    this.planCoupe = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
   }
 
   onRemove() {
@@ -51,7 +58,7 @@ export class CoucheMaquettes3D {
   }
 
   render(gl, args) {
-    if (!this.reference || !this.modeles.size) return;
+    if (!this.reference || (!this.modeles.size && !this.plan)) return;
     const principale = new THREE.Matrix4().fromArray(args.defaultProjectionData.mainMatrix);
     const r = this.reference;
     const s = this.echelleRef;
@@ -60,8 +67,8 @@ export class CoucheMaquettes3D {
       .multiply(new THREE.Matrix4().makeScale(s, s, s));
     this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();
     if (this.coupe != null) {
-      this.plan.constant = this.coupe;
-      this.renderer.clippingPlanes = [this.plan];
+      this.planCoupe.constant = this.coupe;
+      this.renderer.clippingPlanes = [this.planCoupe];
     } else {
       this.renderer.clippingPlanes = [];
     }
@@ -71,7 +78,8 @@ export class CoucheMaquettes3D {
 
   // ---------------------------------------------------------------- modèles
 
-  _matrice(affichage) {
+  // Matrice locale (mètres, Z vertical) → scène. gltf : le modèle glTF a l'axe Y vertical.
+  _matrice(affichage, gltf = true) {
     const o = MercatorCoordinate.fromLngLat(affichage.origine);
     const ax = MercatorCoordinate.fromLngLat(affichage.axe_x);
     const ay = MercatorCoordinate.fromLngLat(affichage.axe_y);
@@ -90,7 +98,7 @@ export class CoucheMaquettes3D {
       0, 0, 0, 1,
     );
     // glTF : Y vertical → Z vertical
-    return m.multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2));
+    return gltf ? m.multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)) : m;
   }
 
   charger(id, url, affichage, progression) {
@@ -167,12 +175,18 @@ export class CoucheMaquettes3D {
     for (const k of this.modeles.keys()) this._appliquer(k);
   }
 
+  /** Atténue toutes les maquettes (1 : opacité normale). */
+  attenuer(facteur) {
+    this.attenuation = facteur;
+    for (const k of this.modeles.keys()) this._appliquer(k);
+  }
+
   _appliquer(id) {
     const m = this.modeles.get(id);
     if (!m?.groupe) return;
     m.groupe.visible = m.visible;
     const attenue = this.isole && this.isole !== id;
-    const op = m.opacite * (attenue ? 0.12 : 1);
+    const op = m.opacite * (attenue ? 0.12 : 1) * this.attenuation;
     m.groupe.traverse((o) => {
       if (!o.isMesh) return;
       for (const mat of [o.material].flat()) {
@@ -192,18 +206,115 @@ export class CoucheMaquettes3D {
     this.carte?.triggerRepaint();
   }
 
+  // ---------------------------------------------------------------- plan des locaux
+
+  static _formes(geojson) {
+    const polys = geojson.type === 'Polygon' ? [geojson.coordinates] : geojson.coordinates;
+    return polys.map((anneaux) => {
+      const forme = new THREE.Shape(anneaux[0].map(([x, y]) => new THREE.Vector2(x, y)));
+      for (const trou of anneaux.slice(1)) forme.holes.push(new THREE.Path(trou.map(([x, y]) => new THREE.Vector2(x, y))));
+      return { forme, contour: anneaux[0] };
+    });
+  }
+
+  /** Plan d'un niveau : emprises des locaux, colorées, posées à l'altitude de leur plancher. */
+  afficherPlan(id, affichage, locaux, couleur) {
+    this.retirerPlan();
+    const groupe = new THREE.Group();
+    groupe.matrixAutoUpdate = false;
+    groupe.matrix.copy(this._matrice(affichage, false));
+    groupe.userData.idModele = id;
+    for (const l of locaux) {
+      if (!l.emprise_locale || l.z_min == null) continue;
+      const noeud = new THREE.Group();
+      noeud.name = l.guid;
+      noeud.userData.local = l;
+      const mat = new THREE.MeshBasicMaterial({ color: couleur(l), transparent: true, opacity: 0.62,
+        side: THREE.DoubleSide, depthWrite: false });
+      for (const { forme, contour } of CoucheMaquettes3D._formes(l.emprise_locale)) {
+        const geo = new THREE.ShapeGeometry(forme);
+        geo.translate(0, 0, l.z_min + 0.03);
+        const surface = new THREE.Mesh(geo, mat);
+        surface.renderOrder = 2;
+        noeud.add(surface);
+        const pts = contour.map(([x, y]) => new THREE.Vector3(x, y, l.z_min + 0.05));
+        const ligne = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), this.matContour);
+        ligne.renderOrder = 3;
+        noeud.add(ligne);
+      }
+      groupe.add(noeud);
+    }
+    groupe.updateMatrixWorld(true);
+    this.plan = { id, groupe, volume: null };
+    this.scene.add(groupe);
+    this.carte.triggerRepaint();
+  }
+
+  retirerPlan() {
+    if (!this.plan) return;
+    this.scene.remove(this.plan.groupe);
+    this.plan.groupe.traverse((o) => {
+      o.geometry?.dispose();
+      if (o.material && o.material !== this.matContour && o.material !== this.matVolume && o.material !== this.matVolumeArete) o.material.dispose();
+    });
+    this.plan = null;
+    this.carte?.triggerRepaint();
+  }
+
+  /** Volume doré du local choisi (extrusion de son emprise entre ses altitudes basse et haute). */
+  montrerVolume(guid) {
+    if (!this.plan) return;
+    if (this.plan.volume) {
+      this.plan.groupe.remove(this.plan.volume);
+      this.plan.volume.traverse((o) => o.geometry?.dispose());
+      this.plan.volume = null;
+    }
+    const noeud = guid && this.plan.groupe.children.find((n) => n.name === guid);
+    if (noeud) {
+      const l = noeud.userData.local;
+      const volume = new THREE.Group();
+      for (const { forme } of CoucheMaquettes3D._formes(l.emprise_locale)) {
+        const geo = new THREE.ExtrudeGeometry(forme, { depth: Math.max(0.1, l.z_max - l.z_min), bevelEnabled: false });
+        geo.translate(0, 0, l.z_min);
+        const m = new THREE.Mesh(geo, this.matVolume);
+        m.renderOrder = 4;
+        volume.add(m, new THREE.LineSegments(new THREE.EdgesGeometry(geo), this.matVolumeArete));
+      }
+      this.plan.groupe.add(volume);
+      volume.updateMatrixWorld(true);
+      this.plan.volume = volume;
+    }
+    this.carte.triggerRepaint();
+  }
+
   // ---------------------------------------------------------------- sélection
 
-  /** Objet de maquette sous le point écran { x, y } (pixels CSS), ou null. */
-  objetSous(point) {
-    if (!this.modeles.size || !this.camera) return null;
+  _rayon(point) {
     const canvas = this.carte.getCanvas();
     const x = (point.x / canvas.clientWidth) * 2 - 1;
     const y = 1 - (point.y / canvas.clientHeight) * 2;
     const inv = this.camera.projectionMatrixInverse;
     const a = new THREE.Vector3(x, y, -1).applyMatrix4(inv);
     const b = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
-    const rayon = new THREE.Raycaster(a, b.sub(a).normalize());
+    return new THREE.Raycaster(a, b.sub(a).normalize());
+  }
+
+  /** Local du plan affiché sous le point écran : { id, guid, local } ou null. */
+  localSous(point) {
+    if (!this.plan || !this.camera || !this.reference) return null;
+    for (const hit of this._rayon(point).intersectObject(this.plan.groupe, true)) {
+      if (!hit.object.isMesh || hit.object.parent === this.plan.volume) continue;
+      if (this.coupe != null && hit.point.z > this.coupe + 0.5) continue;
+      const noeud = hit.object.parent;
+      if (noeud?.userData.local) return { id: this.plan.id, guid: noeud.name, local: noeud.userData.local };
+    }
+    return null;
+  }
+
+  /** Objet de maquette sous le point écran { x, y } (pixels CSS), ou null. */
+  objetSous(point) {
+    if (!this.modeles.size || !this.camera || !this.reference) return null;
+    const rayon = this._rayon(point);
     const cibles = [...this.modeles.entries()]
       .filter(([k, m]) => m.groupe && m.visible && (!this.isole || this.isole === k)).map(([, m]) => m.groupe);
     for (const hit of rayon.intersectObjects(cibles, true)) {

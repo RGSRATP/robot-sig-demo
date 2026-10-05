@@ -70,6 +70,22 @@ def maquette(schema: str, nom: str, origine_site=(0.0, 0.0, 0.0), latlon=None, e
         api.run("geometry.assign_representation", f, product=mur, representation=rep)
         pset = api.run("pset.add_pset", f, product=mur, name="Données d'identification")
         api.run("pset.edit_pset", f, pset=pset, properties={"SGP_DI_Sous_Ouvrage": f"SO-{i + 1:02d}"})
+
+    # Un local de 4 m × 3 m × 2,8 m dans l'angle des murs, rattaché à l'étage par agrégation (comme Revit),
+    # avec ses codes ; la clé de typologie porte un accent (variante rencontrée dans les maquettes réelles).
+    local = api.run("root.create_entity", f, ifc_class="IfcSpace", name="B1.01")
+    local.LongName = "Local technique"
+    api.run("aggregate.assign_object", f, products=[local], relating_object=etage)
+    ml = __import__("numpy").eye(4)
+    ml[:3, 3] = (origine_site[0] - 4.0, origine_site[1] + 0.2, origine_site[2])
+    api.run("geometry.edit_object_placement", f, product=local, matrix=ml, is_si=True)
+    rep = api.run("geometry.add_slab_representation", f, context=corps, depth=2.8,
+                  polyline=[(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0), (0.0, 0.0)])
+    api.run("geometry.assign_representation", f, product=local, representation=rep)
+    pset = api.run("pset.add_pset", f, product=local, name="Données d'identification")
+    api.run("pset.edit_pset", f, pset=pset, properties={
+        "SGP_DI_Sous_Ouvrage": "TEST-B-N00-LT-001", "SGP_DI_Intitulé_Typologie_Espace": "Local technique",
+        "SGP_DI_Typologie_Espace": "LT", "SGP_DI_Niveau": "N00", "SGP_DI_Intitule_Niveau": "RDC", "SGP_DI_Ouvrage": "TEST"})
     return f, site, contexte
 
 

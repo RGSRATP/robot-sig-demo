@@ -10,6 +10,7 @@ traitement:
 
 affichage_3d:
   chargement_automatique_max_mo: 25
+  zoom_chargement_automatique: 15      # les maquettes légères se chargent quand elles sont à l'écran à partir de ce zoom
 
 identification:
   systemes_candidats: ["EPSG:2154", "EPSG:3949"]

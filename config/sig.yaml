@@ -4,6 +4,10 @@ carte:
   centre_wgs84: [2.35, 48.85]   # Île-de-France
   zoom_initial: 10
   systeme_donnees_attendu: "EPSG:2154"
+  # Police des étiquettes (codes des locaux) : glyphes de la Géoplateforme, appelés par le navigateur
+  glyphes: "https://data.geopf.fr/annexes/ressources/vectorTiles/fonts/{fontstack}/{range}.pbf"
+  police: "Source Sans Pro Regular"
+  hauteur_coupe_plan_m: 1.5   # plan des locaux : coupe au-dessus du plancher du niveau (convention des plans)
 
 fonds_ign:   # Géoplateforme IGN, WMTS — URL à vérifier au lot 0
   defaut: plan
@@ -23,6 +27,16 @@ chargement:
   seuil_objets_filtre_emprise: 20000   # au-delà, chargement limité à l'emprise affichée
   max_resultats_recherche: 50
   marge_controle_systeme_deg: 0.5      # tolérance (degrés) du contrôle « emprise compatible avec le système déclaré »
+
+# Interrogation croisée SIG ↔ maquettes (lot 4)
+croisement:
+  tampon_m: 0                   # marge autour de l'emprise d'une maquette ou d'un objet SIG
+  max_objets_par_couche: 500    # au-delà, la liste d'une couche est tronquée (le total reste indiqué)
+
+# Exports CSV (Excel en français : point-virgule, UTF-8 avec BOM)
+export:
+  separateur: ";"
+  encodage: "utf-8-sig"
 
 # Attribut affiché comme nom d'un objet (recherche, fiche) : premier champ présent de cette liste,
 # sauf si la couche déclare « champ_libelle ». Comparaison insensible à la casse.

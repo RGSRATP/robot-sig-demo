@@ -181,7 +181,7 @@ def test_geometrie_glb_et_emprise(jeu, tmp_path):
 def test_proprietes_index_et_fiche(jeu, tmp_path):
     f = lecture.ouvrir(jeu[0] / "methode2a_site_cc49_identifie.ifc")
     n = proprietes.indexer(f, tmp_path / "p.sqlite")
-    assert n == 2
+    assert n == 3   # deux murs et un local
     mur = f.by_type("IfcWall")[0]
     fiche = proprietes.lire_fiche(tmp_path / "p.sqlite", mur.GlobalId)
     assert fiche["type_ifc"] == "IfcWall" and fiche["etage"] == "N00"

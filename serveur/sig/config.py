@@ -55,6 +55,9 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         if not isinstance(url, str) or not all(p in url for p in ("{z}", "{x}", "{y}")):
             raise erreur(f"« fonds_ign.{nom}.url » doit contenir {{z}}, {{x}} et {{y}}")
 
+    if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
+        raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")
+
     dossier = (cfg.get("donnees") or {}).get("dossier_sig")
     if not isinstance(dossier, str) or not dossier:
         raise erreur("« donnees.dossier_sig » absent")
@@ -72,6 +75,16 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         raise erreur("« palette » doit être une liste de couleurs")
     if not isinstance(cfg.get("style_selection"), dict):
         raise erreur("« style_selection » absent")
+    croisement = cfg.get("croisement") or {}
+    if not _nombre(croisement.get("tampon_m")) or not _nombre(croisement.get("max_objets_par_couche"), True):
+        raise erreur("section « croisement » incomplète (tampon_m, max_objets_par_couche)")
+    export = cfg.get("export") or {}
+    if export.get("separateur") not in (";", ",", "\t") or not isinstance(export.get("encodage"), str):
+        raise erreur("section « export » incomplète (separateur « ; », « , » ou tabulation ; encodage)")
+    try:
+        "é".encode(export["encodage"])
+    except LookupError:
+        raise erreur(f"« export.encodage » inconnu : {export['encodage']}") from None
 
     declarations = cfg.get("couches_fichiers")
     if declarations is None:
@@ -177,6 +190,9 @@ def config_carte(cfg: dict) -> dict:
         "centre_wgs84": cfg["carte"]["centre_wgs84"],
         "zoom_initial": cfg["carte"]["zoom_initial"],
         "fond_defaut": fonds["defaut"],
+        "glyphes": cfg["carte"].get("glyphes"),
+        "hauteur_coupe_plan_m": cfg["carte"]["hauteur_coupe_plan_m"],
+        "police": cfg["carte"].get("police"),
         "fonds": [
             {
                 "id": nom,

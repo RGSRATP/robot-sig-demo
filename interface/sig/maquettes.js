@@ -1,49 +1,82 @@
-// Maquettes IFC : liste (état du traitement, positionnement), emprises au sol sur la carte, modèles 3D
-// dans la carte (vue3d.js), fiche d'une maquette et de ses objets. Données : /api/sig/maquettes.
+// Maquettes IFC : arborescence (dossiers, puis lots quand un ouvrage en contient beaucoup), état des traitements,
+// emprises au sol sur la carte, modèles 3D dans la carte (vue3d.js), fiche d'une maquette et de ses objets.
+// Données : /api/sig/maquettes.
 import { envoyer, lire } from './api.js';
 import { afficherMaquette, afficherObjetIfc } from './fiche.js';
 import { bouton, el, icone } from './ui.js';
 
 const ATTENTE_SUIVI_MS = 3000;     // rafraîchissement pendant les traitements
 const COULEUR_EMPRISE = '#0079c1';
-const METHODES_COURTES = {
-  ifc_map_conversion: 'IfcMapConversion',
-  ifc_site_projete: 'IfcSite projeté',
-  ifc_site_latlon: 'Lat/Long approchée',
-  manuel: 'Saisie manuelle',
-};
+const SEUIL_SOUS_GROUPES = 12;     // au-delà, les maquettes d'un dossier sont regroupées par lot
+
+// Nom lisible : sans le préfixe de codification documentaire (PN1424_05_PRB_BIM_005762_15_…), sans le code
+// de l'ouvrage (déjà donné par l'arborescence) ni les suffixes de copie « (1) ».
+export function nomCourt(nom, ouvrage = '') {
+  let n = nom.replace(/^(?:PN|DC)\d{3,4}(?:-\d)?_[0-9A-Z]{2,3}_(?:[A-Z]{3}_)?BIM_[0-9X]+_\d+_?/i, '');
+  n = n.replace(/^\d{2}-SID-\d+-/, '').replace(/(\s*\(\d+\))+$/g, '');
+  const code = ouvrage.split(' ')[0];
+  if (code) n = n.replace(new RegExp(`(^|[_ -])${code}(?=[_ -]|$)`, 'g'), '$1');
+  n = n.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+  return n || nom;
+}
+
+function lot(court) {
+  const t = court.split(' ')[0] || '';
+  return /^[A-Z][A-Z0-9-]{1,7}$/.test(t) ? t : 'Autres';
+}
 
 export class GestionnaireMaquettes {
-  constructor(carte, couche3d, { panneau, anomalies, surEtat, surSelection }) {
+  constructor(carte, couche3d, { panneau, anomalies, surEtat, surSelection, complementsFiche, planLocaux }) {
     this.carte = carte;
     this.c3d = couche3d;
     this.panneau = panneau;
     this.panneauAnomalies = anomalies;
     this.surEtat = surEtat || (() => {});
     this.surSelection = surSelection || (() => {});
+    this.complementsFiche = complementsFiche || (() => []);
+    this.planLocaux = planLocaux || (() => {});
     this.maquettes = new Map();   // id -> données serveur
     this.affichees = new Set();   // ids dont la 3D est demandée
+    this.masquees = new Set();    // ids masqués par l'utilisateur (pas de rechargement automatique)
     this.progression = new Map(); // id -> texte de chargement 3D
+    this.ouverts = new Set();     // nœuds dépliés de l'arborescence
     this.filtre = '';
     this.ficheOuverte = null;
     this._minuteur = null;
+    this._premier = true;
   }
 
-  async demarrer() {
+  async demarrer(police) {
     this.carte.addSource('sig-maquettes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, promoteId: 'id' });
     this.carte.addLayer({ id: 'sig-maquettes-fond', type: 'fill', source: 'sig-maquettes',
       paint: { 'fill-color': COULEUR_EMPRISE, 'fill-opacity': ['case', ['boolean', ['feature-state', 'charge'], false], 0.04, 0.18] } });
     this.carte.addLayer({ id: 'sig-maquettes-contour', type: 'line', source: 'sig-maquettes',
       paint: { 'line-color': COULEUR_EMPRISE, 'line-width': ['case', ['boolean', ['feature-state', 'choisie'], false], 3.5, 1.6],
                'line-dasharray': [3, 1.5] } });
-    this.carte.addLayer({ id: 'sig-maquettes-nom', type: 'symbol', source: 'sig-maquettes', minzoom: 15,
-      layout: { 'text-field': ['get', 'nom'], 'text-size': 11, 'text-font': ['Noto Sans Regular'], 'text-optional': true },
-      paint: { 'text-color': '#003a5d', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
-    // Les étiquettes exigent une police (glyphs) : sans glyphes configurés, le calque est retiré sans erreur.
-    if (!this.carte.getStyle().glyphs) this.carte.removeLayer('sig-maquettes-nom');
+    if (police && this.carte.getStyle().glyphs) {
+      this.carte.addLayer({ id: 'sig-maquettes-nom', type: 'symbol', source: 'sig-maquettes', minzoom: 14, maxzoom: 17.5,
+        layout: { 'text-field': ['get', 'nom'], 'text-size': 11, 'text-font': [police], 'text-optional': true },
+        paint: { 'text-color': '#003a5d', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
+    }
     this.carte.addLayer(this.c3d);
+    this.carte.on('moveend', () => this._chargerALaVue());
     this.panneau.replaceChildren(el('p', { className: 'sig-info', textContent: 'Inventaire des maquettes…' }));
     await this.actualiser();
+  }
+
+  /** Charge en 3D les maquettes légères visibles à l'écran, à partir du zoom configuré. */
+  _chargerALaVue() {
+    const seuil = this.inventaire?.zoom_chargement_automatique;
+    if (seuil == null || this.carte.getZoom() < seuil) return;
+    const b = this.carte.getBounds();
+    for (const m of this.maquettes.values()) {
+      const pos = m.positionnement;
+      if (m.etat.phase !== 'pret' || pos?.statut !== 'positionnee' || pos.locaux_seuls || !pos.affichage.chargement_automatique) continue;
+      if (this.affichees.has(m.id) || this.masquees.has(m.id)) continue;
+      const [x1, y1, x2, y2] = pos.emprise_wgs84;
+      if (x2 < b.getWest() || x1 > b.getEast() || y2 < b.getSouth() || y1 > b.getNorth()) continue;
+      this.afficher3d(m.id, true);
+    }
   }
 
   // ------------------------------------------------------------ données
@@ -59,21 +92,31 @@ export class GestionnaireMaquettes {
       return;
     }
     this.inventaire = inv;
-    const nouvelles = [];
+    const signature = (m) => m && JSON.stringify([m.etat.phase, m.positionnement?.statut, m.locaux?.phase, m.locaux?.nb]);
+    const ficheAvant = signature(this.maquettes.get(this.ficheOuverte));
     for (const m of inv.maquettes) {
-      const avant = this.maquettes.get(m.id);
+      m.ouvrage = m.dossier.split('/').pop();
+      m.nomCourt = nomCourt(m.nom, m.ouvrage);
       this.maquettes.set(m.id, m);
-      const pos = m.positionnement;
-      if (pos?.statut === 'positionnee' && pos.affichage.chargement_automatique && avant?.etat.phase !== 'pret'
-          && !this.affichees.has(m.id) && !this._masqueesParUtilisateur?.has(m.id)) {
-        nouvelles.push(m.id);
+    }
+    if (this._premier) {
+      // déplier les premiers niveaux (ligne, type d'ouvrage)
+      for (const m of inv.maquettes) {
+        const parties = m.dossier.split('/');
+        for (let i = 1; i <= Math.min(2, parties.length - 1); i += 1) this.ouverts.add(parties.slice(0, i).join('/'));
       }
+      this._premier = false;
     }
     this._majEmprises();
     this._rendre();
-    for (const id of nouvelles) this.afficher3d(id, true);
-    if (this.ficheOuverte && this.maquettes.has(this.ficheOuverte)) this.ouvrirFiche(this.ficheOuverte, false);
-    const enCours = inv.maquettes.filter((m) => m.etat.phase === 'en_cours' || m.etat.phase === 'en_attente').length;
+    this._chargerALaVue();
+    // la fiche ouverte n'est redessinée que si son état change (sinon, les résultats affichés seraient perdus)
+    if (this.ficheOuverte && this.maquettes.has(this.ficheOuverte)
+        && signature(this.maquettes.get(this.ficheOuverte)) !== ficheAvant) {
+      this.ouvrirFiche(this.ficheOuverte, false, false);
+    }
+    const enCours = inv.maquettes.filter((m) => m.etat.phase === 'en_cours' || m.etat.phase === 'en_attente'
+      || (m.locaux && m.locaux.phase !== 'pret' && m.locaux.phase !== 'erreur')).length;
     this.surEtat({ total: inv.maquettes.length, enCours, courant: inv.maquettes.find((m) => m.etat.phase === 'en_cours') });
     if (enCours) this._minuteur = setTimeout(() => this.actualiser(), ATTENTE_SUIVI_MS);
   }
@@ -83,7 +126,7 @@ export class GestionnaireMaquettes {
     for (const m of this.maquettes.values()) {
       const pos = m.positionnement;
       if (pos?.statut !== 'positionnee') continue;
-      features.push({ type: 'Feature', geometry: pos.emprise_geojson, properties: { id: m.id, nom: m.nom } });
+      features.push({ type: 'Feature', geometry: pos.emprise_geojson, properties: { id: m.id, nom: m.nomCourt } });
     }
     this.carte.getSource('sig-maquettes').setData({ type: 'FeatureCollection', features });
     for (const id of this.affichees) {
@@ -98,7 +141,7 @@ export class GestionnaireMaquettes {
     const pos = m?.positionnement;
     if (pos?.statut !== 'positionnee') return;
     this.affichees.add(id);
-    this._masqueesParUtilisateur?.delete(id);
+    this.masquees.delete(id);
     this.progression.set(id, 'chargement 3D…');
     this._rendre();
     try {
@@ -118,17 +161,17 @@ export class GestionnaireMaquettes {
     }
     this.carte.setFeatureState({ source: 'sig-maquettes', id }, { charge: this.c3d.estCharge(id) });
     this._rendre();
-    if (!automatique && this.ficheOuverte === id) this.ouvrirFiche(id, false);
+    if (!automatique && this.ficheOuverte === id) this.ouvrirFiche(id, false, false);
   }
 
   masquer3d(id) {
     this.affichees.delete(id);
-    (this._masqueesParUtilisateur ||= new Set()).add(id);
+    this.masquees.add(id);
     this.c3d.retirer(id);
     this.progression.delete(id);
     this.carte.setFeatureState({ source: 'sig-maquettes', id }, { charge: false });
     this._rendre();
-    if (this.ficheOuverte === id) this.ouvrirFiche(id, false);
+    if (this.ficheOuverte === id) this.ouvrirFiche(id, false, false);
   }
 
   basculer3d(id) {
@@ -139,20 +182,29 @@ export class GestionnaireMaquettes {
   isoler(id) {
     this.c3d.isoler(this.c3d.isole === id ? null : id);
     this._rendre();
-    if (this.ficheOuverte === id) this.ouvrirFiche(id, false);
+    if (this.ficheOuverte === id) this.ouvrirFiche(id, false, false);
   }
 
-  zoomer(id) {
-    const pos = this.maquettes.get(id)?.positionnement;
-    if (!pos?.emprise_wgs84) return;
-    const [x1, y1, x2, y2] = pos.emprise_wgs84;
-    this.carte.fitBounds([[x1, y1], [x2, y2]], { padding: 80, maxZoom: 19, pitch: Math.max(this.carte.getPitch(), 55),
+  _emprise(ids) {
+    let b = null;
+    for (const id of ids) {
+      const e = this.maquettes.get(id)?.positionnement?.emprise_wgs84;
+      if (!e) continue;
+      b = b ? [Math.min(b[0], e[0]), Math.min(b[1], e[1]), Math.max(b[2], e[2]), Math.max(b[3], e[3])] : [...e];
+    }
+    return b;
+  }
+
+  zoomer(ids) {
+    const b = this._emprise([ids].flat());
+    if (!b) return;
+    this.carte.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 80, maxZoom: 19, pitch: Math.max(this.carte.getPitch(), 55),
       bearing: this.carte.getBearing() });
   }
 
   async recalculer(id) {
     this.masquer3d(id);
-    this._masqueesParUtilisateur.delete(id);
+    this.masquees.delete(id);
     try {
       await envoyer(`maquettes/${id}/recalculer`);
     } catch (e) {
@@ -170,7 +222,18 @@ export class GestionnaireMaquettes {
     return f ? f.properties.id : null;
   }
 
-  ouvrirFiche(id, zoomer = false) {
+  /** Révèle une maquette dans l'arborescence (dossiers dépliés). */
+  reveler(id) {
+    const m = this.maquettes.get(id);
+    if (!m) return;
+    const parties = m.dossier.split('/');
+    for (let i = 1; i <= parties.length; i += 1) this.ouverts.add(parties.slice(0, i).join('/'));
+    this.ouverts.add(`${m.dossier}#${lot(m.nomCourt)}`);
+    this._rendre();
+    this.panneau.querySelector(`[data-maquette="${id}"]`)?.scrollIntoView({ block: 'nearest' });
+  }
+
+  ouvrirFiche(id, zoomer = false, reveler = true) {
     const m = this.maquettes.get(id);
     if (!m) return;
     if (this.ficheOuverte && this.ficheOuverte !== id) {
@@ -181,13 +244,19 @@ export class GestionnaireMaquettes {
       this.carte.setFeatureState({ source: 'sig-maquettes', id }, { choisie: true });
     }
     if (zoomer) this.zoomer(id);
-    afficherMaquette(m, {
+    if (reveler) this.reveler(id);
+    else this._rendre();
+    afficherMaquette({ ...m, nom: m.nomCourt, nomComplet: m.nom }, {
       chargee: this.affichees.has(id),
       isolee: this.c3d.isole === id,
+      opacite: this.c3d.modeles.get(id)?.opacite,
+      definirOpacite: (v) => this.c3d.definir(id, { opacite: v }),
       basculer3d: () => this.basculer3d(id),
       zoomer: () => this.zoomer(id),
       isoler: () => this.isoler(id),
       recalculer: () => this.recalculer(id),
+      planLocaux: () => this.planLocaux(m),
+      complements: this.complementsFiche(m),
     }, () => this.deselectionner());
   }
 
@@ -202,13 +271,14 @@ export class GestionnaireMaquettes {
       fiche = { erreur: e.message };
     }
     if (this.c3d.selection?.guid !== cible.guid) return;   // autre clic entre-temps
-    afficherObjetIfc(fiche, m, () => this.c3d.deselectionner());
+    afficherObjetIfc(fiche, m && { ...m, nom: m.nomCourt }, () => this.c3d.deselectionner());
   }
 
   deselectionner() {
     if (this.ficheOuverte) this.carte.setFeatureState({ source: 'sig-maquettes', id: this.ficheOuverte }, { choisie: false });
     this.ficheOuverte = null;
     this.c3d.deselectionner();
+    this._rendre();
   }
 
   /** Hauteurs (m / terrain) couvertes par les maquettes chargées, pour la coupe horizontale. */
@@ -222,59 +292,137 @@ export class GestionnaireMaquettes {
     return Number.isFinite(bas) ? [Math.floor(bas), Math.ceil(haut)] : null;
   }
 
-  // ------------------------------------------------------------ volet
+  // ------------------------------------------------------------ arborescence
 
-  _ligne(m) {
+  _arbre(maquettes) {
+    const racine = { cle: '', nom: '', enfants: new Map(), maquettes: [] };
+    for (const m of maquettes) {
+      let noeud = racine;
+      const parties = m.dossier === '.' ? [] : m.dossier.split('/');
+      parties.forEach((p, i) => {
+        if (!noeud.enfants.has(p)) noeud.enfants.set(p, { cle: parties.slice(0, i + 1).join('/'), nom: p, enfants: new Map(), maquettes: [] });
+        noeud = noeud.enfants.get(p);
+      });
+      noeud.maquettes.push(m);
+    }
+    // dossiers chargés : sous-groupes par lot (ARC, SGO, CIF…)
+    const regrouper = (noeud) => {
+      for (const e of noeud.enfants.values()) regrouper(e);
+      if (noeud.maquettes.length > SEUIL_SOUS_GROUPES) {
+        const lots = new Map();
+        for (const m of noeud.maquettes) {
+          const l = lot(m.nomCourt);
+          if (!lots.has(l)) lots.set(l, { cle: `${noeud.cle}#${l}`, nom: l, enfants: new Map(), maquettes: [], lot: true });
+          lots.get(l).maquettes.push(m);
+        }
+        noeud.maquettes = [];
+        const ordre = [...lots.entries()].sort(([a], [b]) => (a === 'Autres') - (b === 'Autres') || a.localeCompare(b));
+        for (const [l, g] of ordre) noeud.enfants.set(`#${l}`, g);
+      }
+    };
+    regrouper(racine);
+    return racine;
+  }
+
+  _toutes(noeud) {
+    return [...noeud.maquettes, ...[...noeud.enfants.values()].flatMap((e) => this._toutes(e))];
+  }
+
+  _ligneMaquette(m) {
     const pos = m.positionnement;
     const e = m.etat;
     const charge = this.affichees.has(m.id);
-    const li = el('li', { className: 'sig-maquette' });
-    const nom = el('button', { type: 'button', className: 'sig-maquette__nom', textContent: m.nom, title: m.fichier });
-    nom.addEventListener('click', () => this.ouvrirFiche(m.id, pos?.statut === 'positionnee'));
+    const classes = ['sig-arbre__feuille'];
+    if (this.ficheOuverte === m.id) classes.push('sig-arbre__feuille--choisie');
+    if (this.c3d.isole === m.id) classes.push('sig-maquette--isolee');
+    const li = el('li', { className: classes.join(' ') });
+    li.dataset.maquette = m.id;
 
-    let etiquette;
-    if (e.phase === 'pret' && pos) {
-      etiquette = pos.statut === 'positionnee'
-        ? el('span', { className: `sig-etiquette sig-etiquette--${pos.precision === 'approchée' ? 'alerte' : 'ok'}`,
-          textContent: METHODES_COURTES[pos.methode] || pos.methode, title: `${pos.libelle}${pos.systeme ? ` — ${pos.systeme}` : ''}` })
-        : el('span', { className: 'sig-etiquette sig-etiquette--erreur', textContent: 'Non positionnée', title: pos.raison || '' });
-    } else if (e.phase === 'erreur') {
-      etiquette = el('span', { className: 'sig-etiquette sig-etiquette--erreur', textContent: 'Erreur', title: e.message });
-    } else if (e.phase === 'en_cours') {
-      etiquette = el('span', { className: 'sig-etiquette sig-etiquette--cours', textContent: `${e.progression ?? 0} %` });
-    } else {
-      etiquette = el('span', { className: 'sig-etiquette', textContent: e.position ? `En attente (${e.position})` : 'En attente' });
-    }
-
-    const outils = el('div', { className: 'sig-maquette__outils' });
-    if (pos?.statut === 'positionnee') {
-      const oeil = el('button', { type: 'button', className: `sig-bouton-icone${charge ? ' sig-bouton-icone--actif' : ''}`,
-        title: charge ? 'Masquer la 3D' : `Afficher en 3D (${pos.affichage.taille_mo} Mo)` }, icone('maquettes', 18));
+    let oeil;
+    if (pos?.locaux_seuls) {
+      oeil = el('button', { type: 'button', className: 'sig-bouton-icone', title: 'Plan des locaux' }, icone('plan', 16));
+      oeil.addEventListener('click', () => this.planLocaux(m));
+    } else if (pos?.statut === 'positionnee') {
+      oeil = el('button', { type: 'button', className: `sig-bouton-icone${charge ? ' sig-bouton-icone--actif' : ''}`,
+        title: charge ? 'Masquer la 3D' : `Afficher en 3D (${pos.affichage.taille_mo} Mo)` }, icone('maquettes', 16));
       oeil.addEventListener('click', () => this.basculer3d(m.id));
-      outils.append(oeil, bouton('zoom', 'Zoomer sur la maquette', () => this.zoomer(m.id)));
-      if (charge) {
-        const op = el('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: this.c3d.modeles.get(m.id)?.opacite ?? 1,
-          title: 'Opacité de la maquette' });
-        op.addEventListener('input', () => this.c3d.definir(m.id, { opacite: Number(op.value) }));
-        outils.append(op);
-      }
+    } else {
+      oeil = el('span', { className: 'sig-arbre__vide' });
     }
-    li.append(el('div', { className: 'sig-maquette__tete' }, nom, etiquette), outils);
-    const details = [];
+    const nom = el('button', { type: 'button', className: 'sig-arbre__nom', textContent: m.nomCourt, title: `${m.nom}\n${m.fichier}` });
+    nom.addEventListener('click', () => this.ouvrirFiche(m.id, pos?.statut === 'positionnee', false));
+
+    let etiquette = null;
+    if (e.phase === 'en_cours') etiquette = el('span', { className: 'sig-etiquette sig-etiquette--cours', textContent: `${e.progression ?? 0} %` });
+    else if (e.phase === 'en_attente') etiquette = el('span', { className: 'sig-etiquette', textContent: 'en attente' });
+    else if (e.phase === 'erreur') etiquette = el('span', { className: 'sig-etiquette sig-etiquette--erreur', textContent: 'erreur', title: e.message });
+    else if (pos?.statut !== 'positionnee') etiquette = el('span', { className: 'sig-etiquette sig-etiquette--erreur', textContent: 'non positionnée', title: pos?.raison || '' });
+    else if (pos.precision === 'approchée') etiquette = el('span', { className: 'sig-etiquette sig-etiquette--alerte', textContent: 'approchée', title: pos.libelle });
+
+    const infos = [];
+    if (m.locaux?.phase === 'pret' && m.locaux.nb) infos.push(`${m.locaux.nb} locaux`);
+    if (pos?.affichage && !pos.affichage.chargement_automatique && !charge) infos.push(`${pos.affichage.taille_mo} Mo`);
+    li.append(el('div', { className: 'sig-arbre__ligne' }, oeil, nom,
+      infos.length ? el('span', { className: 'sig-arbre__info', textContent: infos.join(' · ') }) : null, etiquette));
+    const prog = this.progression.get(m.id);
+    if (prog) {
+      const z = el('div', { className: 'sig-arbre__progression', textContent: prog });
+      z.dataset.progression = m.id;
+      li.append(z);
+    }
     if (e.phase === 'en_cours') {
       const barre = el('div', { className: 'sig-progression' }, el('span'));
       barre.firstChild.style.width = `${e.progression ?? 0}%`;
       li.append(barre);
-      details.push(e.message);
     }
-    if (e.phase === 'pret' && pos?.statut !== 'positionnee' && pos?.raison) details.push(pos.raison);
-    if (e.phase === 'erreur') details.push(e.message);
-    li.append(el('div', { className: 'sig-maquette__info', textContent: details.join(' · ') }));
-    const prog = el('div', { className: 'sig-maquette__info' });
-    prog.dataset.progression = m.id;
-    prog.textContent = this.progression.get(m.id) || '';
-    li.append(prog);
-    if (this.c3d.isole === m.id) li.classList.add('sig-maquette--isolee');
+    return li;
+  }
+
+  _noeud(noeud, profondeur, forceOuvert) {
+    const toutes = this._toutes(noeud);
+    const ouvert = forceOuvert || this.ouverts.has(noeud.cle);
+    const positionnees = toutes.filter((m) => m.positionnement?.statut === 'positionnee');
+    const en3d = positionnees.filter((m) => this.affichees.has(m.id)).length;
+    const enCours = toutes.filter((m) => m.etat.phase === 'en_cours' || m.etat.phase === 'en_attente').length;
+
+    const basculer = () => {
+      if (this.ouverts.has(noeud.cle)) this.ouverts.delete(noeud.cle); else this.ouverts.add(noeud.cle);
+      this._rendre();
+    };
+    const chevron = el('button', { type: 'button', className: `sig-arbre__chevron${ouvert ? ' sig-arbre__chevron--ouvert' : ''}`,
+      ariaExpanded: String(ouvert), title: ouvert ? 'Replier' : 'Déplier' }, icone('bas', 14));
+    chevron.addEventListener('click', basculer);
+    const nom = el('button', { type: 'button', className: `sig-arbre__groupe${noeud.lot ? ' sig-arbre__groupe--lot' : ''}`, textContent: noeud.nom });
+    nom.addEventListener('click', basculer);
+    const compte = el('span', { className: 'sig-arbre__compte', textContent: `${toutes.length}${en3d ? ` · ${en3d} en 3D` : ''}`,
+      title: `${toutes.length} maquette(s), ${positionnees.length} positionnée(s), ${en3d} affichée(s) en 3D` });
+    const actions = el('span', { className: 'sig-arbre__actions' });
+    if (positionnees.length) {
+      const legeres = positionnees.filter((m) => m.positionnement.affichage.chargement_automatique && !m.positionnement.locaux_seuls);
+      const tout = en3d > 0;
+      const titre = tout ? 'Masquer la 3D du groupe'
+        : `Afficher la 3D du groupe (${legeres.length} maquette(s) légère(s) ; les lourdes se chargent une à une)`;
+      const b = bouton('maquettes', titre, () => {
+        if (tout) positionnees.forEach((m) => this.affichees.has(m.id) && this.masquer3d(m.id));
+        else legeres.forEach((m) => this.afficher3d(m.id));
+      });
+      if (tout) b.classList.add('sig-bouton-icone--actif');
+      actions.append(b, bouton('zoom', 'Zoomer sur le groupe', () => this.zoomer(positionnees.map((m) => m.id))));
+    }
+    const tete = el('div', { className: 'sig-arbre__tete' }, chevron, nom, compte,
+      enCours ? el('span', { className: 'sig-etiquette sig-etiquette--cours', textContent: `${enCours} en cours` }) : null, actions);
+    tete.style.paddingLeft = `${profondeur * 12}px`;
+    const li = el('li', { className: 'sig-arbre__noeud' }, tete);
+    if (ouvert) {
+      const ul = el('ul', { className: 'sig-arbre' });
+      for (const e of noeud.enfants.values()) ul.append(this._noeud(e, profondeur + 1, forceOuvert));
+      for (const m of [...noeud.maquettes].sort((a, b) => a.nomCourt.localeCompare(b.nomCourt, 'fr'))) {
+        const f = this._ligneMaquette(m);
+        f.style.paddingLeft = `${(profondeur + 1) * 12}px`;
+        ul.append(f);
+      }
+      li.append(ul);
+    }
     return li;
   }
 
@@ -284,35 +432,42 @@ export class GestionnaireMaquettes {
     const toutes = [...this.maquettes.values()];
     const positionnees = toutes.filter((m) => m.positionnement?.statut === 'positionnee').length;
     const traitees = toutes.filter((m) => m.etat.phase === 'pret').length;
-    const filtre = this.filtre.trim().toLowerCase();
-    const visibles = toutes.filter((m) => !filtre || m.fichier.toLowerCase().includes(filtre));
-
-    const groupes = new Map();
-    for (const m of visibles) {
-      const g = m.dossier.split('/').slice(-2).join(' › ') || 'Racine';
-      if (!groupes.has(g)) groupes.set(g, []);
-      groupes.get(g).push(m);
-    }
-    const blocs = [];
-    for (const [g, ms] of groupes) {
-      blocs.push(el('section', { className: 'sig-groupe' },
-        el('h3', { className: 'sig-groupe__titre', textContent: `${g} (${ms.length})` }),
-        el('ul', { className: 'sig-maquettes' }, ...ms.map((m) => this._ligne(m)))));
-    }
+    const f = this.filtre.trim().toLowerCase();
+    const visibles = toutes.filter((m) => !f || m.fichier.toLowerCase().includes(f) || m.nomCourt.toLowerCase().includes(f));
 
     const saisie = this._saisie || (this._saisie = (() => {
-      const s = el('input', { type: 'search', className: 'sig-filtre', placeholder: 'Filtrer les maquettes (nom, ouvrage…)' });
+      const s = el('input', { type: 'search', className: 'sig-filtre', placeholder: 'Filtrer (ouvrage, lot, nom…)' });
       s.addEventListener('input', () => { this.filtre = s.value; this._rendre(); });
       return s;
     })());
     const resume = el('p', { className: 'sig-resume' },
       `${toutes.length} maquette(s) · ${traitees} traitée(s) · ${positionnees} positionnée(s) · ${this.affichees.size} en 3D`);
-    const entete = el('div', { className: 'sig-volet__outils' }, saisie,
-      bouton('actualiser', 'Actualiser la liste', () => this.actualiser()));
+    const tout = (ouvrir) => () => {
+      if (ouvrir) {
+        for (const m of toutes) {
+          const p = m.dossier.split('/');
+          for (let i = 1; i <= p.length; i += 1) this.ouverts.add(p.slice(0, i).join('/'));
+          this.ouverts.add(`${m.dossier}#${lot(m.nomCourt)}`);
+        }
+      } else {
+        this.ouverts.clear();
+      }
+      this._rendre();
+    };
+    const outils = el('div', { className: 'sig-volet__outils' }, saisie,
+      bouton('plein', 'Tout déplier', tout(true)), bouton('moins', 'Tout replier', tout(false)),
+      bouton('actualiser', 'Actualiser la liste (nouvelles maquettes)', () => this.actualiser()));
+
+    const arbre = this._arbre(visibles);
+    const ul = el('ul', { className: 'sig-arbre sig-arbre--racine' });
+    for (const e of arbre.enfants.values()) ul.append(this._noeud(e, 0, Boolean(f)));
+    for (const m of arbre.maquettes) ul.append(this._ligneMaquette(m));
+    if (!visibles.length) ul.append(el('li', { className: 'sig-info', textContent: f ? 'Aucune maquette ne correspond au filtre.' : 'Aucune maquette.' }));
+
     const defilement = this.panneau.querySelector('.sig-defilement')?.scrollTop;
     const avaitFocus = document.activeElement === saisie;
-    const liste = el('div', { className: 'sig-defilement' }, ...blocs);
-    this.panneau.replaceChildren(resume, entete, liste);
+    const liste = el('div', { className: 'sig-defilement' }, ul);
+    this.panneau.replaceChildren(resume, outils, liste);
     if (defilement) liste.scrollTop = defilement;
     if (avaitFocus) saisie.focus();
     this._rendreAnomalies(toutes);
@@ -323,7 +478,7 @@ export class GestionnaireMaquettes {
     const nonPos = toutes.filter((m) => m.positionnement?.statut === 'non_positionnee');
     const avert = toutes.filter((m) => m.positionnement?.statut === 'positionnee' && m.positionnement.avertissements?.length);
     const ligne = (m, texte) => {
-      const b = el('button', { type: 'button', className: 'sig-lien', textContent: m.nom, title: m.fichier });
+      const b = el('button', { type: 'button', className: 'sig-lien', textContent: `${m.ouvrage} › ${m.nomCourt}`, title: m.fichier });
       b.addEventListener('click', () => this.ouvrirFiche(m.id, true));
       return el('li', { className: 'sig-anomalie' }, b, el('span', { textContent: texte }));
     };
@@ -333,7 +488,7 @@ export class GestionnaireMaquettes {
         : el('p', { className: 'sig-info', textContent: 'Aucune.' }),
       erreurs.length ? el('h3', { textContent: `Maquettes en erreur de traitement (${erreurs.length})` }) : null,
       erreurs.length ? el('ul', { className: 'sig-anomalies sig-anomalies--maquettes' }, ...erreurs.map((m) => ligne(m, m.etat.message))) : null,
-      avert.length ? el('h3', { textContent: 'Avertissements de positionnement' }) : null,
+      avert.length ? el('h3', { textContent: `Avertissements de positionnement (${avert.length})` }) : null,
       avert.length ? el('ul', { className: 'sig-anomalies sig-anomalies--maquettes' },
         ...avert.flatMap((m) => m.positionnement.avertissements.map((t) => ligne(m, t)))) : null,
     ));

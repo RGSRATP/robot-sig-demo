@@ -75,7 +75,7 @@ function montrer(noeuds, fermeture) {
 
 // ---------------------------------------------------------------- objet SIG
 
-export function afficherFiche(fiche, couche, fermeture) {
+export function afficherFiche(fiche, couche, fermeture, complements = []) {
   if (!panneau) return;
   const source = couche.service
     ? `${couche.libelle} — service Esri, données du ${dateCourte(couche.service.date_maj)}`
@@ -91,6 +91,7 @@ export function afficherFiche(fiche, couche, fermeture) {
   montrer([
     entete(fiche.libelle ?? `Objet n° ${fiche.n}`, source, 'Objet SIG'),
     liste(coords),
+    ...complements,
     el('h4', { textContent: `Attributs (${Object.keys(fiche.attributs).length})` }),
     tableau(fiche.attributs),
   ], fermeture);
@@ -106,7 +107,10 @@ export function afficherMaquette(m, actions, fermeture) {
   const meta = m.metadonnees || {};
   const noeuds = [entete(m.nom, m.dossier, 'Maquette IFC')];
   const outils = el('div', { className: 'sig-fiche__actions' });
-  if (pos?.statut === 'positionnee') {
+  if (pos?.locaux_seuls) {
+    noeuds.push(el('p', { className: 'sig-info', textContent: 'Maquette de locaux (IfcSpace) seuls : consultez-la avec le plan des locaux.' }));
+  }
+  if (pos?.statut === 'positionnee' && !pos.locaux_seuls) {
     const b3d = el('button', { type: 'button', className: 'sig-bouton sig-bouton--principal',
       textContent: actions.chargee ? 'Masquer la 3D' : `Afficher en 3D (${pos.affichage.taille_mo} Mo)` });
     b3d.addEventListener('click', actions.basculer3d);
@@ -115,6 +119,21 @@ export function afficherMaquette(m, actions, fermeture) {
   }
   outils.append(bouton('actualiser', 'Relancer le traitement', actions.recalculer));
   noeuds.push(outils);
+  if (actions.chargee && actions.opacite != null) {
+    const op = el('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: actions.opacite });
+    op.addEventListener('input', () => actions.definirOpacite(Number(op.value)));
+    noeuds.push(el('label', { className: 'sig-reglage' }, el('span', { className: 'sig-reglage__libelle', textContent: 'Opacité de la maquette' }), op));
+  }
+  const loc = m.locaux;
+  if (loc?.phase === 'pret' && loc.nb > 0) {
+    const b = el('button', { type: 'button', className: 'sig-bouton', textContent: `Plan des locaux (${loc.nb} · ${loc.niveaux} niveaux)` });
+    b.addEventListener('click', actions.planLocaux);
+    noeuds.push(el('div', { className: 'sig-fiche__actions' }, b));
+  } else if (loc && loc.phase !== 'pret') {
+    noeuds.push(el('p', { className: loc.phase === 'erreur' ? 'sig-alerte' : 'sig-info',
+      textContent: loc.phase === 'erreur' ? `Locaux non extraits : ${loc.message}` : 'Extraction des locaux en cours…' }));
+  }
+  noeuds.push(...(actions.complements || []));
 
   if (pos) {
     const etat = pos.statut === 'positionnee'
@@ -174,4 +193,48 @@ export function afficherObjetIfc(fiche, maquette, fermeture) {
   }
   if (fiche.anomalie) noeuds.push(el('p', { className: 'sig-alerte', textContent: fiche.anomalie }));
   montrer(noeuds, fermeture);
+}
+
+// ---------------------------------------------------------------- local (IfcSpace)
+
+const LIBELLES_CODES = {
+  SGP_DI_Sous_Ouvrage: 'Code local', SGP_DI_Intitule_Typologie_Espace: 'Typologie', SGP_DI_Typologie_Espace: 'Code typologie',
+  SGP_DI_Niveau: 'Code niveau', SGP_DI_Intitule_Niveau: 'Niveau', SGP_DI_Ouvrage: 'Ouvrage', SGP_DI_Intitule_Ouvrage: 'Intitulé ouvrage',
+  SGP_DI_Batiment: 'Bâtiment', SGP_DI_Intitule_Batiment: 'Intitulé bâtiment', SGP_DI_Incrementation: 'Numéro',
+};
+
+export function afficherLocal(l, maquette, { couleur, chargerProprietes }, fermeture) {
+  if (!panneau) return;
+  const pastille = el('span', { className: 'sig-legende__pastille' });
+  pastille.style.background = couleur;
+  const nf = (v) => v.toLocaleString('fr-FR', { maximumFractionDigits: 2 });
+  const codes = Object.entries(l.codes || {}).map(([k, v]) => [LIBELLES_CODES[k] || k, v]);
+  const zone = el('div');
+  const b = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Propriétés IFC complètes' });
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    zone.replaceChildren(el('p', { className: 'sig-info', textContent: 'Chargement…' }));
+    try {
+      const f = await chargerProprietes();
+      const psets = Object.entries(f.psets || {}).sort(([x], [y]) => x.localeCompare(y, 'fr'));
+      zone.replaceChildren(...psets.map(([nom, valeurs]) => el('details', { className: 'sig-pset' },
+        el('summary', { textContent: `${nom} (${Object.keys(valeurs).length})` }), tableau(valeurs))));
+    } catch (e) {
+      zone.replaceChildren(el('p', { className: 'sig-erreur', textContent: e.message }));
+    }
+  });
+  montrer([
+    entete(l.code || l.nom || 'Local', maquette?.nomCourt || maquette?.nom, 'Local (IfcSpace)'),
+    el('p', { className: 'sig-local__typologie' }, pastille, ` ${l.typologie || l.nom_long || ''}`),
+    liste([
+      ['Nom', l.nom], ['Nom long', l.nom_long], ['Niveau', [l.niveau, l.intitule_niveau].filter(Boolean).join(' · ')],
+      ['Surface', l.surface != null ? `${nf(l.surface)} m² (${l.surface_source})` : null],
+      ['Hauteurs / terrain', l.hauteurs ? `${nf(l.hauteurs[0])} m → ${nf(l.hauteurs[1])} m` : null],
+      ['Centre (Lambert 93)', l.x_l93 != null ? `X ${nf(l.x_l93)} · Y ${nf(l.y_l93)}` : null],
+      ['GlobalId', l.guid],
+    ]),
+    el('h4', { textContent: `Données d'identification (${codes.length})` }),
+    codes.length ? liste(codes) : el('p', { className: 'sig-info', textContent: 'Aucun code SGP_DI_*.' }),
+    el('div', { className: 'sig-fiche__actions' }, b), zone,
+  ], fermeture);
 }

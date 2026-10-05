@@ -33,8 +33,21 @@ def psets(element) -> dict:
             for nom, valeurs in util_element.get_psets(element).items()}
 
 
+def niveau(element):
+    """Étage d'un objet : contenant spatial, sinon agrégat parent (cas des IfcSpace)."""
+    o = element
+    for _ in range(6):
+        parent = util_element.get_container(o) or util_element.get_aggregate(o)
+        if parent is None:
+            return None
+        if parent.is_a("IfcBuildingStorey"):
+            return parent
+        o = parent
+    return None
+
+
 def fiche(element) -> dict:
-    etage = util_element.get_container(element)
+    etage = niveau(element)
     type_objet = util_element.get_type(element)
     return {
         "guid": element.GlobalId,

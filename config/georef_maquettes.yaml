@@ -12,6 +12,7 @@ traitement:
 
 affichage_3d:
   chargement_automatique_max_mo: 25   # modèles 3D plus lourds : chargés à la demande (bouton)
+  zoom_chargement_automatique: 15      # les maquettes légères se chargent quand elles sont à l'écran à partir de ce zoom
 
 # Identification du système des coordonnées projetées portées par l'IfcSite (coordonnées partagées) :
 # le système candidat retenu est celui où RefLatitude/RefLongitude tombent à moins de « tolerance_m » du site.

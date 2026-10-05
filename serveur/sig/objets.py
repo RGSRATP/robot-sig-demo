@@ -64,7 +64,10 @@ def _lire(couche: Couche) -> gpd.GeoDataFrame:
 
 
 def charger(couche: Couche) -> Charge:
-    cle = (couche.id, couche._chemin.stat().st_mtime_ns, couche.systeme)
+    try:
+        cle = (couche.id, couche._chemin.stat().st_mtime_ns, couche.systeme)
+    except OSError as e:
+        raise AnomalieCouche(f"fichier inaccessible depuis l'inventaire ({type(e).__name__})") from e
     with _verrou:
         if cle in _cache:
             _cache.move_to_end(cle)

@@ -6,8 +6,10 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './carte.css';
 import { lire } from './api.js';
 import { GestionnaireCouches } from './couches.js';
+import { sectionMaquette, sectionObjet } from './croisement.js';
 import { fermerFiche, monterFiche } from './fiche.js';
 import { versLambert93 } from './lambert93.js';
+import { GestionnaireLocaux } from './locaux.js';
 import { GestionnaireMaquettes } from './maquettes.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
@@ -38,7 +40,9 @@ function styleInitial(cfg) {
     layers.push({ id: `fond-${f.id}`, type: 'raster', source: `fond-${f.id}`,
       layout: { visibility: f.id === cfg.fond_defaut ? 'visible' : 'none' } });
   }
-  return { version: 8, sources, layers };
+  const style = { version: 8, sources, layers };
+  if (cfg.glyphes) style.glyphs = cfg.glyphes;   // police des étiquettes (codes des locaux, noms des maquettes)
+  return style;
 }
 
 // ---------------------------------------------------------------- volets simples
@@ -151,6 +155,7 @@ export async function monterCarte(conteneur) {
   const d = coque.droite;
   const pCouches = g.ajouter('couches', 'Couches', 'couches');
   const pMaquettes = g.ajouter('maquettes', 'Maquettes', 'maquettes');
+  const pLocaux = g.ajouter('locaux', 'Plan des locaux', 'plan');
   const pFonds = g.ajouter('fonds', 'Fonds de carte', 'fonds');
   const pRecherche = g.ajouter('recherche', 'Recherche', 'recherche');
   const pAnomalies = g.ajouter('anomalies', 'Anomalies', 'anomalies');
@@ -216,12 +221,28 @@ export async function monterCarte(conteneur) {
   });
 
   const pastilleMaquettes = coque.pastille('Maquettes…');
+  let maquettes = null;
+  let locaux = null;
   const couches = new GestionnaireCouches(carte, { couches: pCouches, recherche: pRecherche, anomalies: anomaliesCouches },
-    cfg.style_selection, { surAnomalies: () => majBadge() });
+    cfg.style_selection, {
+      surAnomalies: () => majBadge(),
+      complementsFiche: (couche, n) => sectionObjet(couche, n, {
+        ouvrirMaquette: (id) => maquettes.ouvrirFiche(id, true),
+        ouvrirLocal: (id, guid) => locaux.ouvrir(maquettes.maquettes.get(id), guid),
+      }),
+    });
   const c3d = new CoucheMaquettes3D();
-  const maquettes = new GestionnaireMaquettes(carte, c3d, {
+  locaux = new GestionnaireLocaux(carte, c3d, {
+    panneau: pLocaux,
+    ouvrirVolet: () => g.ouvrir('locaux'),
+    police: cfg.police,
+    hauteurCoupe: cfg.hauteur_coupe_plan_m,
+  });
+  maquettes = new GestionnaireMaquettes(carte, c3d, {
     panneau: pMaquettes,
     anomalies: anomaliesMaquettes,
+    complementsFiche: (m) => sectionMaquette(m, { couches, ouvrirObjetSig: (id, n) => couches.ouvrirObjet(id, n, true) }),
+    planLocaux: (m) => locaux.ouvrir(m),
     surSelection: () => couches.deselectionner(false),
     surEtat: ({ total, enCours, courant }) => {
       pastilleMaquettes.textContent = enCours
@@ -239,8 +260,15 @@ export async function monterCarte(conteneur) {
   }
   d.panneaux.get('vue3d').bouton.addEventListener('click', () => vue3d.majBornes());
 
-  // Répartition des clics : objet de maquette 3D, puis objet SIG, puis emprise de maquette.
+  // Répartition des clics : local du plan affiché, objet de maquette 3D, objet SIG, emprise de maquette.
   carte.on('click', (e) => {
+    const local = c3d.localSous(e.point);
+    if (local) {
+      couches.deselectionner(false);
+      c3d.deselectionner();
+      locaux.selectionner(local.guid);
+      return;
+    }
     const cible3d = c3d.objetSous(e.point);
     if (cible3d) {
       couches.deselectionner(false);
@@ -260,7 +288,9 @@ export async function monterCarte(conteneur) {
       return;
     }
     couches.deselectionner(false);
+    couches.effacerResultats();
     maquettes.deselectionner();
+    locaux.deselectionner();
     fermerFiche();
   });
   carte.on('mousemove', (e) => {
@@ -270,7 +300,7 @@ export async function monterCarte(conteneur) {
 
   const demarrer = async () => {
     await couches.demarrer();
-    await maquettes.demarrer();
+    await maquettes.demarrer(cfg.police);
   };
   if (carte.loaded()) demarrer();
   else carte.once('load', demarrer);
