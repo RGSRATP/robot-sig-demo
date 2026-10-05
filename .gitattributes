@@ -1,0 +1,2 @@
+# Jeu de test : fichiers gardés octet pour octet (pas de conversion des fins de ligne)
+tests/donnees/jeu/** -text
