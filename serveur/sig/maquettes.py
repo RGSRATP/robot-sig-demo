@@ -176,7 +176,8 @@ class Traitements:
                 if id_ == self._courant or resultat(cfgm, id_, cle) or erreur(cfgm, id_, cle):
                     continue
                 self._attente[id_] = (chemin.stat().st_size, chemin, cle, cfgm)
-            if self._attente and (self._fil is None or not self._fil.is_alive()):
+            # le fil se désinscrit lui-même sous le verrou quand la file est vide (pas de course à l'arrêt)
+            if self._attente and self._fil is None:
                 self._fil = threading.Thread(target=self._boucle, name="traitements-ifc", daemon=True)
                 self._fil.start()
 
@@ -203,6 +204,7 @@ class Traitements:
             with self._verrou:
                 if not self._attente:
                     self._courant = None
+                    self._fil = None
                     return
                 id_ = min(self._attente, key=lambda k: self._attente[k][0])
                 _taille, chemin, cle, cfgm = self._attente.pop(id_)

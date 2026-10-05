@@ -183,14 +183,21 @@ def test_file_de_traitement_sous_processus(cfgm, tmp_path):
     while (file.en_cours() or file.nb_attente()) and time.time() - debut < 120:
         time.sleep(0.2)
     ok, ko = choix if choix[0][1].startswith("methode") else choix[::-1]
-    assert maq.resultat(cfgm, ok[0], maq.cle_traitement(ok[2], cfgm)) is not None
+
+    def diagnostic(m):
+        d = maq.dossier_cache(cfgm, m[0])
+        return {n: (d / n).read_text(encoding="utf-8", errors="replace")[-800:]
+                for n in ("erreur.json", "journal.txt", "trace.txt") if (d / n).is_file()}
+
+    assert maq.resultat(cfgm, ok[0], maq.cle_traitement(ok[2], cfgm)) is not None, diagnostic(ok)
     assert (maq.dossier_cache(cfgm, ok[0]) / "modele.glb").is_file()
-    assert "ISO-10303-21" in maq.erreur(cfgm, ko[0], maq.cle_traitement(ko[2], cfgm))["message"]
+    e = maq.erreur(cfgm, ko[0], maq.cle_traitement(ko[2], cfgm))
+    assert e and "ISO-10303-21" in e["message"], diagnostic(ko)
     # relance : le résultat est effacé puis recalculé
     file.relancer(cfgm, ok[0], ok[2])
     while (file.en_cours() or file.nb_attente()) and time.time() - debut < 180:
         time.sleep(0.2)
-    assert maq.resultat(cfgm, ok[0], maq.cle_traitement(ok[2], cfgm)) is not None
+    assert maq.resultat(cfgm, ok[0], maq.cle_traitement(ok[2], cfgm)) is not None, diagnostic(ok)
 
 
 # ---------------------------------------------------------------- API
