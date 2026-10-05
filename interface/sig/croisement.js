@@ -54,14 +54,14 @@ export function sectionMaquette(m, { couches, ouvrirObjetSig }) {
 }
 
 /** Objet SIG → maquettes et locaux au droit de l'objet. */
-export function sectionObjet(couche, n, { ouvrirMaquette, ouvrirLocal }) {
+export function sectionObjet(couche, n, { ouvrirMaquette, ouvrirLocal, nomDe = (m) => m.nom }) {
   return [section('Interrogation croisée', 'Maquettes et locaux au droit de l\'objet', async (zone) => {
     const r = await lire(`couches/${couche.id}/objets/${n}/maquettes`);
     const entete = el('div', { className: 'sig-croisement__tete' },
       el('span', { textContent: `${r.total} maquette(s), ${r.nb_locaux} local(aux)${r.tampon_m ? ` — marge ${nf(r.tampon_m)} m` : ''}` }),
       lienCsv(`api/sig/couches/${couche.id}/objets/${n}/maquettes?format=csv`));
     const blocs = r.maquettes.map((m) => {
-      const b = el('button', { type: 'button', className: 'sig-lien', textContent: m.nom, title: m.fichier });
+      const b = el('button', { type: 'button', className: 'sig-lien', textContent: nomDe(m), title: m.fichier });
       b.addEventListener('click', () => ouvrirMaquette(m.id));
       const locaux = m.locaux.map((l) => {
         const bl = el('button', { type: 'button', className: 'sig-lien', textContent: l.code || l.nom });

@@ -97,7 +97,6 @@ export class GestionnaireCouches {
     }
     this.inventaire = inv;
     this._preparerCarte();
-    this.panneaux.recherche.replaceChildren(this._blocRecherche());
     for (const c of inv.couches) {
       this.etats.set(c.id, { couche: c, visible: c.visible, opacite: 1, charge: false, info: '' });
       this.ordre.push(c.id);
@@ -106,6 +105,8 @@ export class GestionnaireCouches {
       this._appliquerVisibilite(c.id);
     }
     this._rendre();
+    // après l'inventaire : la liste des couches de la recherche doit être remplie
+    this.panneaux.recherche.replaceChildren(this._blocRecherche());
     this._appliquerOrdre();
     this.carte.on('moveend', () => {
       clearTimeout(this._minuteur);

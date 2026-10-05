@@ -229,6 +229,7 @@ export async function monterCarte(conteneur) {
       complementsFiche: (couche, n) => sectionObjet(couche, n, {
         ouvrirMaquette: (id) => maquettes.ouvrirFiche(id, true),
         ouvrirLocal: (id, guid) => locaux.ouvrir(maquettes.maquettes.get(id), guid),
+        nomDe: (m) => { const x = maquettes.maquettes.get(m.id); return x ? `${x.ouvrage} › ${x.nomCourt}` : m.nom; },
       }),
     });
   const c3d = new CoucheMaquettes3D();
