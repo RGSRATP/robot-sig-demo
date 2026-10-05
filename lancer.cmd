@@ -26,6 +26,15 @@ if not exist "interface\dist\index.html" (
   )
 )
 
+rem Un serveur déjà lancé (ancienne version) occuperait le port : le navigateur s'ouvrirait dessus.
+netstat -ano | findstr /r /c:":8000 .*LISTENING" > nul
+if not errorlevel 1 (
+  echo Un serveur occupe déjà le port 8000, probablement un démonstrateur lancé précédemment.
+  echo Fermez sa fenêtre ^(ou Ctrl+C dedans^), puis relancez « lancer ».
+  pause
+  exit /b 1
+)
+
 echo.
 echo Démonstrateur SIG : http://127.0.0.1:8000/   (fermer cette fenêtre ou Ctrl+C pour arrêter)
 echo.

@@ -62,7 +62,7 @@ export class GestionnaireCouches {
     try {
       inv = await lire('couches');
     } catch (e) {
-      this.panneau.replaceChildren(el('p', { className: 'sig-erreur', textContent: `Inventaire impossible : ${e.message}` }));
+      this.panneau.replaceChildren(el('p', { className: 'sig-erreur', textContent: `Inventaire impossible : ${e.message}. Si un ancien serveur tourne encore, fermez sa fenêtre et relancez « lancer ».` }));
       return;
     }
     this.inventaire = inv;
