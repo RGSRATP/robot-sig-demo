@@ -1,0 +1,8 @@
+# Versions alignées sur le .venv du demonstrateur-patrimoine (relevées le 2026-10-05).
+# Installation : .venv\Scripts\python -m pip install --proxy http://127.0.0.1:9000 -r serveur\requirements.txt
+fastapi==0.142.1
+uvicorn[standard]==0.54.0
+pyyaml==6.0.3
+pytest==9.1.1
+httpx==0.28.1
+ifcopenshell==0.9.0
