@@ -1,6 +1,7 @@
-// Gestionnaire des couches fichiers : affichage, ordre, opacité, zoom, filtre d'emprise,
-// clic sur un objet (fiche) et recherche texte. Les couches viennent de /api/sig/couches.
-import { lire } from './api.js';
+// Gestionnaire des couches (fichiers et services Esri) : affichage, ordre, opacité, zoom, filtre
+// d'emprise, clic sur un objet (fiche), recherche texte, état et actualisation des services.
+// Les couches viennent de /api/sig/couches.
+import { dateCourte, envoyer, lire } from './api.js';
 import { afficherFiche, fermerFiche } from './fiche.js';
 
 const DELAI_EMPRISE_MS = 300; // attente après un déplacement avant de recharger une couche filtrée
@@ -40,6 +41,19 @@ function calques(c) {
                'circle-stroke-opacity': op(s.opacite) } },
   ];
 }
+
+const SOURCES = {
+  service: 'téléchargée du service',
+  cache: 'cache local à jour',
+  cache_perime: 'service indisponible : cache ancien',
+  repli: 'service indisponible : export de repli',
+};
+
+export function origineService(s) {
+  return `${SOURCES[s.source] || s.source} — données du ${dateCourte(s.date_maj)}`;
+}
+
+const degradee = (s) => s.source === 'cache_perime' || s.source === 'repli';
 
 const PROPRIETES_OPACITE = {
   fill: ['fill-opacity'], line: ['line-opacity'], circle: ['circle-opacity', 'circle-stroke-opacity'],
@@ -231,7 +245,8 @@ export class GestionnaireCouches {
     });
     const pastille = el('span', { className: `sig-pastille sig-pastille--${c.geometrie}` });
     pastille.style.setProperty('--c', c.style.couleur);
-    const nom = el('span', { className: 'sig-couche__nom', textContent: c.libelle, title: `${c.fichier}${c.couche ? ' › ' + c.couche : ''}` });
+    const nom = el('span', { className: 'sig-couche__nom', textContent: c.libelle,
+      title: c.service ? `${c.service.url}\nfiltre : ${c.service.where}` : `${c.fichier}${c.couche ? ' › ' + c.couche : ''}` });
     const alerte = c.avertissements.length
       ? el('span', { className: 'sig-avert', textContent: '⚠', title: c.avertissements.join('\n') }) : null;
 
@@ -245,6 +260,9 @@ export class GestionnaireCouches {
 
     const details = el('div', { className: 'sig-couche__details' },
       `${c.format} · ${c.nb_objets} objet(s) · ${c.systeme}${c.filtre_emprise ? ' · filtrée sur l\'emprise' : ''}`);
+    if (c.service) {
+      details.append(el('br'), el('span', { className: degradee(c.service) ? 'sig-alerte' : '', textContent: origineService(c.service) }));
+    }
     return el('li', { className: 'sig-couche' },
       el('div', { className: 'sig-couche__tete' }, coche, pastille, nom, alerte),
       details,
@@ -252,6 +270,7 @@ export class GestionnaireCouches {
         btn('▲', 'Monter', () => this._deplacer(id, -1)),
         btn('▼', 'Descendre', () => this._deplacer(id, 1)),
         btn('⌖', 'Zoomer sur la couche', () => this.zoomerSur(c.emprise_wgs84)),
+        c.service ? btn('⟳', 'Actualiser depuis le service', () => this.actualiser(id)) : null,
         opacite),
       el('div', { className: 'sig-couche__info', textContent: etat.info }),
     );
@@ -271,9 +290,61 @@ export class GestionnaireCouches {
     this.panneau.replaceChildren(
       el('details', { className: 'sig-bloc', open: true },
         el('summary', {}, el('h2', { textContent: `Couches (${inv.couches.length})` })), vide, liste),
+      this._blocServices(),
       this._blocRecherche(),
       this._blocAnomalies(),
     );
+  }
+
+  // ------------------------------------------------------------ services Esri
+
+  async actualiser(id) {
+    const etat = this.etats.get(id);
+    this._info(id, 'actualisation depuis le service…');
+    let inv;
+    try {
+      inv = await envoyer(`services/${id}/actualiser`);
+    } catch (e) {
+      this._info(id, `actualisation impossible : ${e.message}`, true);
+      return;
+    }
+    this.inventaire.anomalies = inv.anomalies;
+    const nouvelle = inv.couches.find((c) => c.id === id);
+    if (nouvelle) {
+      // le style reste celui attribué au démarrage (couleur stable)
+      etat.couche = { ...nouvelle, style: etat.couche.style };
+      const i = this.inventaire.couches.findIndex((c) => c.id === id);
+      if (i >= 0) this.inventaire.couches[i] = etat.couche;
+      etat.charge = false;
+    }
+    this._rendre();
+    if (etat.visible) await this._charger(id);
+    const s = etat.couche.service;
+    this._info(id, s.source === 'service' ? `actualisée : ${etat.couche.nb_objets} objet(s)` : origineService(s),
+      s.source !== 'service');
+  }
+
+  _blocServices() {
+    const inv = this.inventaire;
+    if (!inv.nb_services) return null;
+    const services = inv.couches.filter((c) => c.service);
+    const enAnomalie = inv.anomalies.filter((a) => a.service);
+    const ul = el('ul', { className: 'sig-services' });
+    for (const c of services) {
+      const b = el('button', { type: 'button', className: 'sig-btn', textContent: '⟳', title: 'Actualiser depuis le service' });
+      b.addEventListener('click', () => this.actualiser(c.id));
+      ul.append(el('li', { title: c.service.url },
+        el('strong', { textContent: c.libelle }), ' ', b,
+        el('div', { className: degradee(c.service) ? 'sig-info sig-alerte' : 'sig-info', textContent: origineService(c.service) }),
+        c.service.copyright ? el('div', { className: 'sig-info', textContent: `Source : ${c.service.copyright}` }) : null));
+    }
+    for (const a of enAnomalie) {
+      ul.append(el('li', { title: a.fichier }, el('strong', { textContent: a.couche }),
+        el('div', { className: 'sig-erreur', textContent: `non affichée : ${a.message}` })));
+    }
+    const ouvert = enAnomalie.length > 0 || services.some((c) => degradee(c.service));
+    return el('details', { className: 'sig-bloc', open: ouvert },
+      el('summary', {}, el('h2', { textContent: `Services Esri (${services.length}/${inv.nb_services})` })), ul);
   }
 
   _blocRecherche() {
@@ -323,7 +394,8 @@ export class GestionnaireCouches {
     const ul = (items) => el('ul', { className: 'sig-anomalies' }, ...items.map((t) => el('li', { textContent: t })));
     return el('details', { className: 'sig-bloc', open: n > 0 },
       el('summary', {}, el('h2', { textContent: `Anomalies (${n})` })),
-      n ? ul(inv.anomalies.map((a) => `${a.fichier}${a.couche ? ' › ' + a.couche : ''} : ${a.message}`))
+      n ? ul(inv.anomalies.map((a) => (a.service ? `Service « ${a.couche} » : ${a.message}`
+        : `${a.fichier}${a.couche ? ' › ' + a.couche : ''} : ${a.message}`)))
         : el('p', { className: 'sig-info', textContent: 'Aucune couche en anomalie.' }),
       avert.length ? el('h3', { textContent: 'Avertissements (couches affichées)' }) : null,
       avert.length ? ul(avert.flatMap((c) => c.avertissements.map((t) => `${c.libelle} : ${t}`))) : null,

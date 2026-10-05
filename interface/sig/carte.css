@@ -83,3 +83,9 @@
 .sig-attributs { width: 100%; border-collapse: collapse; }
 .sig-attributs td { border-bottom: 1px solid #eef1f4; padding: 3px 4px; vertical-align: top; overflow-wrap: anywhere; }
 .sig-attributs td:first-child { color: var(--sig-gris); width: 40%; }
+
+/* Services Esri (lot 2) */
+.sig-services { list-style: none; margin: 0; padding: 0; }
+.sig-services li { padding: 6px 0; border-bottom: 1px solid #eaeef2; }
+.sig-services li:last-child { border-bottom: 0; }
+.sig-services .sig-btn { padding: 0 6px; }

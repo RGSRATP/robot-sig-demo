@@ -1,4 +1,5 @@
 // Panneau « fiche » d'un objet SIG : attributs et coordonnées (système d'origine et Lambert 93).
+import { dateCourte } from './api.js';
 let panneau = null;
 
 export function monterFiche(racine) {
@@ -31,7 +32,9 @@ export function afficherFiche(fiche, couche, surFermeture) {
   const titre = document.createElement('h2');
   const sous = document.createElement('p');
   sous.className = 'sig-info';
-  sous.textContent = couche.libelle;
+  sous.textContent = couche.service
+    ? `${couche.libelle} — service Esri, données du ${dateCourte(couche.service.date_maj)}`
+    : couche.libelle;
   panneau.replaceChildren(fermer, titre, sous);
 
   if (fiche.erreur) {
