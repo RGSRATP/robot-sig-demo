@@ -47,6 +47,7 @@ class Couche:
     champs: list[str]
     champ_libelle: str | None
     avertissements: list[str] = field(default_factory=list)
+    service: dict | None = None   # couche d'un service Esri : URL, source (service, cache, repli), date de mise à jour
     # Paramètres de lecture (non exposés)
     _csv: dict | None = None
     _chemin: Path | None = None

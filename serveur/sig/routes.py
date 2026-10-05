@@ -10,10 +10,11 @@ from importlib.metadata import PackageNotFoundError, version
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from . import config as cfg_sig
+from . import esri as esri_sig
 from . import inventaire as inv_sig
 from . import objets as obj_sig
 
-VERSION = "0.2.0 (lot 1)"
+VERSION = "0.3.0 (lot 2)"
 
 routeur = APIRouter(prefix="/api/sig", tags=["sig"])
 
@@ -78,21 +79,48 @@ def config_carte(cfg: dict = Depends(_config_valide)):
     return {**cfg_sig.config_carte(cfg), "style_selection": cfg["style_selection"]}
 
 
-@routeur.get("/couches")
-def couches(cfg: dict = Depends(_config_valide)):
-    """Inventaire des couches fichiers : couches chargeables, anomalies et fichiers ignorés."""
+def _inventaire_complet(cfg: dict, forcer: str | None = None) -> dict:
+    inv = inv_sig.inventaire(cfg).publique()
+    couches, anomalies = esri_sig.couches_services(cfg, rang0=len(inv["couches"]), forcer=forcer)
     return {
-        **inv_sig.inventaire(cfg).publique(),
+        **inv,
+        "couches": inv["couches"] + [c.publique() for c in couches],
+        "anomalies": inv["anomalies"] + anomalies,
+        "nb_services": len(cfg["services_esri"]),
         "systeme_attendu": cfg["carte"].get("systeme_donnees_attendu"),
         "seuil_objets_filtre_emprise": cfg["chargement"]["seuil_objets_filtre_emprise"],
     }
 
 
+@routeur.get("/couches")
+def couches(cfg: dict = Depends(_config_valide)):
+    """Inventaire : couches fichiers et couches de services Esri, anomalies et fichiers ignorés."""
+    return _inventaire_complet(cfg)
+
+
+def _service(id_couche: str, cfg: dict) -> dict | None:
+    return next((s for s in cfg["services_esri"] if esri_sig.identifiant(s) == id_couche), None)
+
+
 def _couche(id_couche: str, cfg: dict) -> inv_sig.Couche:
     couche = inv_sig.inventaire(cfg).couche(id_couche)
-    if couche is None:
+    if couche is not None:
+        return couche
+    service = _service(id_couche, cfg)
+    if service is None:
         raise HTTPException(status_code=404, detail=f"couche inconnue : {id_couche}")
-    return couche
+    try:
+        return esri_sig.couche_service(cfg, service, rang=0)
+    except inv_sig.AnomalieCouche as e:
+        raise HTTPException(status_code=422, detail=f"{service['libelle']} : {e}")
+
+
+@routeur.post("/services/{id_couche}/actualiser")
+def actualiser(id_couche: str, cfg: dict = Depends(_config_valide)):
+    """Nouveau téléchargement d'une couche de service, même si son cache est à jour."""
+    if _service(id_couche, cfg) is None:
+        raise HTTPException(status_code=404, detail=f"service inconnu : {id_couche}")
+    return _inventaire_complet(cfg, forcer=id_couche)
 
 
 def _anomalie(e: inv_sig.AnomalieCouche, couche: inv_sig.Couche):

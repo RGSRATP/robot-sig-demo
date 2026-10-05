@@ -66,4 +66,25 @@ couches_fichiers:
   - fichier: "absent.gpkg"
     libelle: "Déclaré mais absent"
 
-services_esri: []
+# Services Esri : faux serveur des tests (tests/sig/faux_arcgis.py), aucun accès réseau.
+esri:
+  dossier_cache: "cache/esri_test"      # remplacé par un dossier temporaire pendant les tests
+  dossier_exports: "tests/donnees/jeu"  # exports de repli
+  proxy: null
+  certificats: null
+  delai_secondes: 5
+  max_objets: 1000
+  cache_heures_defaut: 24
+  nouvel_essai_minutes: 10
+
+services_esri:
+  - libelle: "Gares (faux service)"
+    url: "https://faux.arcgis.test/arcgis/rest/services/Gares/FeatureServer/0"
+    champ_libelle: "nom"
+  - libelle: "Communes (faux service sans pagination)"
+    url: "https://faux.arcgis.test/arcgis/rest/services/Communes/MapServer/1"
+  - libelle: "Service en panne avec repli"
+    url: "https://faux.arcgis.test/arcgis/rest/services/Panne/FeatureServer/0"
+    export: "idfm_gares_rer.geojson"
+  - libelle: "Service en panne sans repli"
+    url: "https://faux.arcgis.test/arcgis/rest/services/Panne/FeatureServer/1"

@@ -4,10 +4,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from serveur.sig import routes
+from serveur.sig import esri, routes
 from serveur.sig.app import app
 from serveur.sig.config import charger_config
 from serveur.sig.inventaire import inventorier
+from tests.sig.faux_arcgis import FauxArcGIS
 
 CONFIG_TEST = Path(__file__).resolve().parents[1] / "donnees" / "sig_test.yaml"
 
@@ -15,6 +16,17 @@ CONFIG_TEST = Path(__file__).resolve().parents[1] / "donnees" / "sig_test.yaml"
 @pytest.fixture(scope="session")
 def cfg_test():
     return charger_config(CONFIG_TEST)
+
+
+@pytest.fixture(autouse=True)
+def faux(cfg_test, tmp_path, monkeypatch):
+    """Faux serveur ArcGIS (les services « Panne » sont injoignables) et cache Esri vide pour chaque test."""
+    serveur = FauxArcGIS(panne={"Panne"})
+    monkeypatch.setitem(cfg_test["esri"], "dossier_cache", str(tmp_path / "cache_esri"))
+    monkeypatch.setattr(esri, "fabrique_client", lambda cfg: serveur.client())
+    esri.reinitialiser()
+    yield serveur
+    esri.reinitialiser()
 
 
 @pytest.fixture(scope="session")

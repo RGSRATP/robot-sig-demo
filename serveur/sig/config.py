@@ -60,8 +60,7 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         raise erreur("« donnees.dossier_sig » absent")
     chargement = cfg.get("chargement") or {}
     for cle in ("seuil_objets_filtre_emprise", "max_resultats_recherche", "marge_controle_systeme_deg"):
-        v = chargement.get(cle)
-        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+        if not _nombre(chargement.get(cle)):
             raise erreur(f"« chargement.{cle} » doit être un nombre positif")
     if not isinstance(cfg.get("champs_libelle"), list):
         raise erreur("« champs_libelle » doit être une liste de noms de champs")
@@ -84,7 +83,62 @@ def _controler(cfg: dict, chemin: Path) -> dict:
             raise erreur(f"« couches_fichiers » n° {i} : clé « fichier » absente")
         if "style" in d and not isinstance(d["style"], dict):
             raise erreur(f"« couches_fichiers » n° {i} ({d['fichier']}) : « style » doit être un dictionnaire")
+
+    services = cfg.get("services_esri")
+    if services is None:
+        cfg["services_esri"] = services = []
+    if not isinstance(services, list):
+        raise erreur("« services_esri » doit être une liste")
+    if services:
+        _controler_esri(cfg, services, erreur)
     return cfg
+
+
+def _nombre(v, strictement_positif=False) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and (v > 0 if strictement_positif else v >= 0)
+
+
+def _controler_esri(cfg: dict, services: list, erreur) -> None:
+    from .esri import MOTIF_URL, identifiant  # import local : esri dépend de config
+
+    esri = cfg.get("esri")
+    if not isinstance(esri, dict):
+        raise erreur("section « esri » absente (requise dès qu'un service est déclaré dans « services_esri »)")
+    for cle in ("dossier_cache", "dossier_exports"):
+        if not isinstance(esri.get(cle), str) or not esri[cle]:
+            raise erreur(f"« esri.{cle} » absent")
+    for cle, strict in (("delai_secondes", True), ("max_objets", True), ("cache_heures_defaut", False),
+                        ("nouvel_essai_minutes", False)):
+        if not _nombre(esri.get(cle), strict):
+            raise erreur(f"« esri.{cle} » doit être un nombre {'strictement ' if strict else ''}positif")
+    if esri.get("proxy") is not None and not isinstance(esri["proxy"], str):
+        raise erreur("« esri.proxy » doit être une URL (ou null pour une connexion directe)")
+    if esri.get("certificats") is not None and not isinstance(esri["certificats"], str):
+        raise erreur("« esri.certificats » doit être un chemin de fichier .pem (ou null)")
+
+    vus = {}
+    for i, s in enumerate(services, 1):
+        if not isinstance(s, dict) or not isinstance(s.get("libelle"), str) or not s["libelle"]:
+            raise erreur(f"« services_esri » n° {i} : clé « libelle » absente")
+        nom = f"« services_esri » n° {i} ({s['libelle']})"
+        if not isinstance(s.get("url"), str) or not MOTIF_URL.match(s["url"]):
+            raise erreur(f"{nom} : « url » doit désigner une couche, …/FeatureServer/<n> ou …/MapServer/<n>")
+        if "token" in s.get("url", "").lower() or any(k in s for k in ("token", "jeton", "mot_de_passe", "password")):
+            raise erreur(f"{nom} : aucun jeton ni mot de passe ici ; indiquez le nom de la variable de .env dans « jeton_env »")
+        for cle in ("taille_page", "max_objets"):
+            if cle in s and not (isinstance(s[cle], int) and not isinstance(s[cle], bool) and s[cle] > 0):
+                raise erreur(f"{nom} : « {cle} » doit être un entier strictement positif")
+        if "cache_heures" in s and not _nombre(s["cache_heures"]):
+            raise erreur(f"{nom} : « cache_heures » doit être un nombre positif")
+        if "style" in s and not isinstance(s["style"], dict):
+            raise erreur(f"{nom} : « style » doit être un dictionnaire")
+        for cle in ("where", "champs", "jeton_env", "export", "export_couche", "systeme", "champ_libelle"):
+            if cle in s and not isinstance(s[cle], str):
+                raise erreur(f"{nom} : « {cle} » doit être un texte")
+        id_ = identifiant(s)
+        if id_ in vus:
+            raise erreur(f"{nom} : même URL et même filtre que le service n° {vus[id_]}")
+        vus[id_] = i
 
 
 def dossier_sig(cfg: dict) -> Path:
