@@ -1,13 +1,17 @@
 """Lecture et contrôle de config/sig.yaml. Aucun paramètre cartographique n'est en dur dans le code."""
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
 import yaml
 
 RACINE = Path(__file__).resolve().parents[2]
-CHEMIN_CONFIG = RACINE / "config" / "sig.yaml"
+# SIG_CONFIG permet de lancer le démonstrateur sur une autre configuration (ex. le jeu de test open data).
+CHEMIN_CONFIG = Path(os.environ.get("SIG_CONFIG") or RACINE / "config" / "sig.yaml")
+if not CHEMIN_CONFIG.is_absolute():
+    CHEMIN_CONFIG = RACINE / CHEMIN_CONFIG
 DOSSIER_DONNEES = RACINE / "donnees"
 
 

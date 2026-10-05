@@ -1,18 +1,85 @@
-.sig-racine { position: relative; width: 100%; height: 100%; font-family: system-ui, sans-serif; }
-.sig-carte { position: absolute; inset: 0; }
-
-.sig-fonds {
-  margin: 0; border: 0;
-  position: absolute; top: 10px; left: 10px; z-index: 2;
-  background: #fff; border-radius: 4px; box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
-  padding: 6px 10px; font-size: 13px;
+.sig-racine {
+  --sig-encre: #1f2328; --sig-gris: #59636e; --sig-trait: #d0d7de; --sig-fond: #ffffff; --sig-accent: #E8B400;
+  display: grid; grid-template-columns: minmax(280px, 340px) 1fr;
+  width: 100%; height: 100%; font: 13px/1.4 system-ui, sans-serif; color: var(--sig-encre);
 }
-.sig-fonds legend { float: left; width: 100%; font-weight: 600; padding: 0; margin-bottom: 4px; }
-.sig-fonds label { display: block; cursor: pointer; line-height: 1.6; }
+@media (max-width: 700px) {
+  .sig-racine { grid-template-columns: 1fr; grid-template-rows: 45% 55%; }
+}
+
+/* ---------- panneau latéral ---------- */
+.sig-panneau { overflow-y: auto; background: var(--sig-fond); border-right: 1px solid var(--sig-trait); }
+.sig-panneau__tete { padding: 10px 14px; border-bottom: 1px solid var(--sig-trait); }
+.sig-panneau h1 { font-size: 16px; margin: 0; }
+.sig-bloc { border-bottom: 1px solid var(--sig-trait); padding: 6px 14px 10px; }
+.sig-bloc > summary { cursor: pointer; list-style-position: outside; }
+.sig-bloc > summary h2 { display: inline; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+.sig-bloc h3 { font-size: 12px; margin: 10px 0 4px; color: var(--sig-gris); }
+.sig-info { color: var(--sig-gris); margin: 4px 0; font-size: 12px; }
+.sig-erreur { color: #b3261e; margin: 4px 0; }
+.sig-alerte { color: #9a6700; }
+
+.sig-fonds label { display: block; cursor: pointer; line-height: 1.7; }
+
+.sig-couches { list-style: none; margin: 6px 0 0; padding: 0; }
+.sig-couche { padding: 6px 0; border-top: 1px solid #eef1f4; }
+.sig-couche__tete { display: flex; align-items: center; gap: 6px; }
+.sig-couche__nom { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
+.sig-couche__details, .sig-couche__info { color: var(--sig-gris); font-size: 11.5px; margin-left: 22px; }
+.sig-couche__outils { display: flex; align-items: center; gap: 4px; margin: 3px 0 0 22px; }
+.sig-couche__outils input[type=range] { flex: 1; min-width: 60px; }
+.sig-avert { color: #9a6700; cursor: help; }
+
+.sig-pastille { width: 12px; height: 12px; flex: none; background: var(--c); }
+.sig-pastille--point { border-radius: 50%; }
+.sig-pastille--ligne { height: 3px; }
+.sig-pastille--polygone { opacity: .7; border: 1px solid var(--c); }
+
+.sig-btn {
+  font: inherit; background: #f6f8fa; border: 1px solid var(--sig-trait); border-radius: 4px;
+  padding: 1px 7px; cursor: pointer; color: var(--sig-encre);
+}
+.sig-btn:hover { background: #eaeef2; }
+
+.sig-recherche { display: grid; grid-template-columns: 1fr auto; gap: 4px; margin-top: 6px; }
+.sig-recherche select { grid-column: 1 / -1; }
+.sig-recherche select, .sig-recherche input { font: inherit; padding: 3px 4px; min-width: 0; }
+.sig-liste-resultats { list-style: none; padding: 0; margin: 4px 0; max-height: 260px; overflow-y: auto; }
+.sig-resultat {
+  display: block; width: 100%; text-align: left; font: inherit; background: none; border: 0;
+  border-bottom: 1px solid #eef1f4; padding: 4px 2px; cursor: pointer; color: inherit;
+}
+.sig-resultat:hover { background: #fff8e1; }
+.sig-resultat span { color: var(--sig-gris); }
+
+.sig-anomalies { margin: 4px 0; padding-left: 18px; }
+.sig-anomalies li { margin-bottom: 3px; overflow-wrap: anywhere; }
+
+/* ---------- carte ---------- */
+.sig-zone { position: relative; min-height: 0; }
+.sig-carte { position: absolute; inset: 0; }
 
 .sig-bandeau {
   position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 3;
   max-width: min(90%, 560px); padding: 8px 14px; border-radius: 4px;
-  background: #fff4d6; border: 1px solid #c99a00; color: #4a3800; font-size: 13px;
+  background: #fff4d6; border: 1px solid #c99a00; color: #4a3800;
 }
 .sig-bandeau--erreur { background: #fde4e1; border-color: #b3261e; color: #5c1410; }
+
+/* ---------- fiche d'un objet ---------- */
+.sig-fiche {
+  position: absolute; top: 10px; right: 50px; z-index: 2; width: min(360px, calc(100% - 70px)); max-height: calc(100% - 50px);
+  display: flex; flex-direction: column; background: var(--sig-fond); border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .25); padding: 10px 12px; border-top: 4px solid var(--sig-accent);
+}
+.sig-fiche[hidden] { display: none; }
+.sig-fiche h2 { font-size: 15px; margin: 0 24px 0 0; overflow-wrap: anywhere; }
+.sig-fiche h3 { font-size: 12px; margin: 10px 0 4px; color: var(--sig-gris); }
+.sig-fiche__fermer { position: absolute; top: 8px; right: 8px; }
+.sig-coords { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin: 8px 0 0; }
+.sig-coords dt { color: var(--sig-gris); }
+.sig-coords dd { margin: 0; font-variant-numeric: tabular-nums; }
+.sig-attributs__defilement { overflow-y: auto; min-height: 0; flex: 1; }
+.sig-attributs { width: 100%; border-collapse: collapse; }
+.sig-attributs td { border-bottom: 1px solid #eef1f4; padding: 3px 4px; vertical-align: top; overflow-wrap: anywhere; }
+.sig-attributs td:first-child { color: var(--sig-gris); width: 40%; }

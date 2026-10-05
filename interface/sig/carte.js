@@ -1,10 +1,13 @@
-// Carte SIG : MapLibre GL sur les fonds IGN déclarés dans config/sig.yaml (servis par /api/sig/config/carte).
+// Carte SIG : MapLibre GL sur les fonds IGN déclarés dans config/sig.yaml (servis par /api/sig/config/carte),
+// panneau latéral (fonds, couches, recherche, anomalies) et fiche des objets.
 // Aucune URL ni coordonnée en dur : tout vient de la configuration du serveur.
 import { Map as CarteMapLibre, NavigationControl, ScaleControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './carte.css';
+import { lire } from './api.js';
+import { GestionnaireCouches } from './couches.js';
+import { monterFiche } from './fiche.js';
 
-const API = 'api/sig';
 const SEUIL_ECHECS_FOND = 3; // tuiles en échec d'affilée avant d'annoncer le fond indisponible
 
 function bandeau(racine) {
@@ -37,10 +40,13 @@ function styleInitial(cfg) {
   return { version: 8, sources, layers };
 }
 
-function selecteurFonds(racine, cfg, choisir) {
-  const boite = document.createElement('fieldset');
-  boite.className = 'sig-fonds';
-  boite.innerHTML = '<legend>Fond de carte</legend>';
+function selecteurFonds(cfg, choisir) {
+  const boite = document.createElement('details');
+  boite.className = 'sig-bloc';
+  boite.open = true;
+  boite.innerHTML = '<summary><h2>Fond de carte</h2></summary>';
+  const groupe = document.createElement('div');
+  groupe.className = 'sig-fonds';
   for (const f of [...cfg.fonds, { id: '', libelle: 'Aucun' }]) {
     const label = document.createElement('label');
     const radio = Object.assign(document.createElement('input'), {
@@ -48,23 +54,27 @@ function selecteurFonds(racine, cfg, choisir) {
     });
     radio.addEventListener('change', () => choisir(f.id));
     label.append(radio, ` ${f.libelle}`);
-    boite.appendChild(label);
+    groupe.appendChild(label);
   }
-  racine.appendChild(boite);
+  boite.appendChild(groupe);
+  return boite;
 }
 
 export async function monterCarte(conteneur) {
   const racine = document.createElement('div');
   racine.className = 'sig-racine';
+  const cote = document.createElement('aside');
+  cote.className = 'sig-panneau';
+  cote.innerHTML = '<header class="sig-panneau__tete"><h1>Carte SIG</h1></header>';
+  const zone = document.createElement('div');
+  zone.className = 'sig-zone';
+  racine.append(cote, zone);
   conteneur.appendChild(racine);
-  const message = bandeau(racine);
+  const message = bandeau(zone);
 
   let cfg;
   try {
-    const r = await fetch(`${API}/config/carte`);
-    const corps = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(corps.detail || `réponse ${r.status}`);
-    cfg = corps;
+    cfg = await lire('config/carte');
   } catch (e) {
     message.montrer(`Configuration de la carte indisponible : ${e.message}. Vérifiez que le serveur est lancé et config/sig.yaml.`, true);
     return null;
@@ -72,7 +82,8 @@ export async function monterCarte(conteneur) {
 
   const divCarte = document.createElement('div');
   divCarte.className = 'sig-carte';
-  racine.appendChild(divCarte);
+  zone.prepend(divCarte);
+  monterFiche(zone);
 
   const carte = new CarteMapLibre({
     container: divCarte,
@@ -101,14 +112,19 @@ export async function monterCarte(conteneur) {
     }
   });
 
-  selecteurFonds(racine, cfg, (id) => {
+  const panneauCouches = document.createElement('div');
+  cote.append(selecteurFonds(cfg, (id) => {
     for (const f of cfg.fonds) {
       carte.setLayoutProperty(`fond-${f.id}`, 'visibility', f.id === id ? 'visible' : 'none');
     }
     fondActif = id;
     echecs = 0;
     message.cacher();
-  });
+  }), panneauCouches);
+
+  const gestionnaire = new GestionnaireCouches(carte, panneauCouches, cfg.style_selection);
+  if (carte.loaded()) gestionnaire.demarrer();
+  else carte.once('load', () => gestionnaire.demarrer());
 
   return carte;
 }

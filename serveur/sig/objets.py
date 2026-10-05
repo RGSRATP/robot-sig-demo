@@ -187,6 +187,7 @@ def fiche(couche: Couche, n: int) -> dict | None:
             "lambert93": {"systeme": "EPSG:2154", **coords(geom_l, 2)},
         },
         "emprise_wgs84": [round(v, 7) for v in geom_w.bounds],
+        "geometrie_wgs84": _geometrie_json(geom_w, 7),
     }
 
 
