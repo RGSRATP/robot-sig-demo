@@ -1,0 +1,69 @@
+# Configuration de test : même structure que config/sig.yaml, appliquée au jeu tests/donnees/jeu/.
+
+carte:
+  centre_wgs84: [2.35, 48.85]   # Île-de-France
+  zoom_initial: 10
+  systeme_donnees_attendu: "EPSG:2154"
+
+fonds_ign:   # Géoplateforme IGN, WMTS — URL à vérifier au lot 0
+  defaut: plan
+  plan:
+    libelle: "Plan IGN v2"
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/png&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+    attribution: "© IGN Géoplateforme"
+  ortho:
+    libelle: "Orthophotos"
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+    attribution: "© IGN Géoplateforme"
+
+donnees:
+  dossier_sig: "tests/donnees/jeu"
+
+chargement:
+  seuil_objets_filtre_emprise: 1000   # au-delà, chargement limité à l'emprise affichée
+  max_resultats_recherche: 50
+  marge_controle_systeme_deg: 0.5      # tolérance (degrés) du contrôle « emprise compatible avec le système déclaré »
+
+# Attribut affiché comme nom d'un objet (recherche, fiche) : premier champ présent de cette liste,
+# sauf si la couche déclare « champ_libelle ». Comparaison insensible à la casse.
+champs_libelle: ["libelle", "nom", "name", "nom_gares", "intitule", "label", "id"]
+
+# Style par défaut selon la géométrie ; la couleur est prise dans la palette, une par couche.
+styles_defaut:
+  point:    { rayon: 5, opacite: 0.9, contour: "#ffffff", epaisseur_contour: 1 }
+  ligne:    { epaisseur: 2.5, opacite: 0.9 }
+  polygone: { opacite: 0.35, epaisseur: 1 }
+palette: ["#d9480f", "#1c7ed6", "#2f9e44", "#ae3ec9", "#f08c00", "#0c8599", "#e03131", "#5c940d", "#3b5bdb", "#a61e4d"]
+style_selection: { couleur: "#E8B400", rayon: 9, epaisseur: 6 }
+
+couches_fichiers:
+  - fichier: "sncf_gares_idf.csv"
+    libelle: "Gares SNCF (Île-de-France)"
+    colonne_x: "x_l93"
+    colonne_y: "y_l93"
+    systeme: "EPSG:2154"
+    separateur: ";"
+  - fichier: "sncf_gares_france.csv"
+    libelle: "Gares SNCF (France)"
+    colonne_x: "x_l93"
+    colonne_y: "y_l93"
+    systeme: "EPSG:2154"
+    visible: false
+  - fichier: "piege_csv_xy_invalides.csv"
+    colonne_x: "x_l93"
+    colonne_y: "y_l93"
+    systeme: "EPSG:2154"
+  - fichier: "piege_csv_sans_colonnes.csv"
+    colonne_x: "x_l93"
+    colonne_y: "y_l93"
+    systeme: "EPSG:2154"
+  - fichier: "systeme_declare_config.gpkg"
+    systeme: "EPSG:2154"
+  - fichier: "idfm_reseau.gpkg"
+    couche: "traces"
+    libelle: "Réseau ferré IDF"
+    style: { couleur: "#495057", epaisseur: 1.5 }
+  - fichier: "absent.gpkg"
+    libelle: "Déclaré mais absent"
+
+services_esri: []

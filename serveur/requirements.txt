@@ -6,3 +6,10 @@ pyyaml==6.0.3
 pytest==9.1.1
 httpx==0.28.1
 ifcopenshell==0.9.0
+# Lot 1 — couches SIG fichiers (shapely aligné sur le patrimoine ; les autres sont propres au module SIG)
+shapely==2.1.2
+pyogrio==0.13.0
+pyproj==3.8.0
+geopandas==1.2.0
+pandas==3.0.6
+numpy==2.5.3

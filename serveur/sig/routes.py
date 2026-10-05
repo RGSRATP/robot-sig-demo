@@ -7,11 +7,13 @@ from __future__ import annotations
 import platform
 from importlib.metadata import PackageNotFoundError, version
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from . import config as cfg_sig
+from . import inventaire as inv_sig
+from . import objets as obj_sig
 
-VERSION = "0.1.0 (lot 0)"
+VERSION = "0.2.0 (lot 1)"
 
 routeur = APIRouter(prefix="/api/sig", tags=["sig"])
 
@@ -65,8 +67,76 @@ def sante(cfg: dict = Depends(_config_ou_erreur)):
     }
 
 
-@routeur.get("/config/carte")
-def config_carte(cfg: dict = Depends(_config_ou_erreur)):
+def _config_valide(cfg: dict = Depends(_config_ou_erreur)) -> dict:
     if "erreur" in cfg:
         raise HTTPException(status_code=503, detail=cfg["erreur"])
-    return cfg_sig.config_carte(cfg)
+    return cfg
+
+
+@routeur.get("/config/carte")
+def config_carte(cfg: dict = Depends(_config_valide)):
+    return {**cfg_sig.config_carte(cfg), "style_selection": cfg["style_selection"]}
+
+
+@routeur.get("/couches")
+def couches(cfg: dict = Depends(_config_valide)):
+    """Inventaire des couches fichiers : couches chargeables, anomalies et fichiers ignorés."""
+    return {
+        **inv_sig.inventaire(cfg).publique(),
+        "systeme_attendu": cfg["carte"].get("systeme_donnees_attendu"),
+        "seuil_objets_filtre_emprise": cfg["chargement"]["seuil_objets_filtre_emprise"],
+    }
+
+
+def _couche(id_couche: str, cfg: dict) -> inv_sig.Couche:
+    couche = inv_sig.inventaire(cfg).couche(id_couche)
+    if couche is None:
+        raise HTTPException(status_code=404, detail=f"couche inconnue : {id_couche}")
+    return couche
+
+
+def _anomalie(e: inv_sig.AnomalieCouche, couche: inv_sig.Couche):
+    return HTTPException(status_code=422, detail=f"{couche.fichier} : {e}")
+
+
+@routeur.get("/couches/{id_couche}/objets")
+def objets(
+    id_couche: str,
+    bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat (WGS84)"),
+    cfg: dict = Depends(_config_valide),
+):
+    couche = _couche(id_couche, cfg)
+    emprise = None
+    if bbox:
+        try:
+            emprise = [float(v) for v in bbox.split(",")]
+            assert len(emprise) == 4 and emprise[0] <= emprise[2] and emprise[1] <= emprise[3]
+        except (ValueError, AssertionError):
+            raise HTTPException(status_code=400, detail="bbox attendu : minLon,minLat,maxLon,maxLat")
+    try:
+        return obj_sig.objets(couche, emprise, cfg["chargement"]["seuil_objets_filtre_emprise"])
+    except inv_sig.AnomalieCouche as e:
+        raise _anomalie(e, couche)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@routeur.get("/couches/{id_couche}/objets/{n}")
+def fiche(id_couche: str, n: int, cfg: dict = Depends(_config_valide)):
+    couche = _couche(id_couche, cfg)
+    try:
+        f = obj_sig.fiche(couche, n)
+    except inv_sig.AnomalieCouche as e:
+        raise _anomalie(e, couche)
+    if f is None:
+        raise HTTPException(status_code=404, detail=f"objet n° {n} absent de la couche")
+    return f
+
+
+@routeur.get("/couches/{id_couche}/recherche")
+def recherche(id_couche: str, q: str = Query(..., min_length=1), cfg: dict = Depends(_config_valide)):
+    couche = _couche(id_couche, cfg)
+    try:
+        return obj_sig.rechercher(couche, q, int(cfg["chargement"]["max_resultats_recherche"]))
+    except inv_sig.AnomalieCouche as e:
+        raise _anomalie(e, couche)

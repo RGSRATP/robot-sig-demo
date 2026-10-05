@@ -30,3 +30,6 @@ desktop.ini
 
 # Réglages locaux de Claude Code
 .claude/settings.local.json
+
+# Téléchargements bruts du générateur de jeu de test
+tests/donnees/sources/

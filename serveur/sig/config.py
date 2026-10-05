@@ -50,7 +50,43 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         url = fonds[nom].get("url")
         if not isinstance(url, str) or not all(p in url for p in ("{z}", "{x}", "{y}")):
             raise erreur(f"« fonds_ign.{nom}.url » doit contenir {{z}}, {{x}} et {{y}}")
+
+    dossier = (cfg.get("donnees") or {}).get("dossier_sig")
+    if not isinstance(dossier, str) or not dossier:
+        raise erreur("« donnees.dossier_sig » absent")
+    chargement = cfg.get("chargement") or {}
+    for cle in ("seuil_objets_filtre_emprise", "max_resultats_recherche", "marge_controle_systeme_deg"):
+        v = chargement.get(cle)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+            raise erreur(f"« chargement.{cle} » doit être un nombre positif")
+    if not isinstance(cfg.get("champs_libelle"), list):
+        raise erreur("« champs_libelle » doit être une liste de noms de champs")
+    styles = cfg.get("styles_defaut")
+    if not isinstance(styles, dict) or not all(isinstance(styles.get(k), dict) for k in ("point", "ligne", "polygone")):
+        raise erreur("« styles_defaut » doit définir point, ligne et polygone")
+    palette = cfg.get("palette")
+    if not isinstance(palette, list) or not palette or not all(isinstance(c, str) for c in palette):
+        raise erreur("« palette » doit être une liste de couleurs")
+    if not isinstance(cfg.get("style_selection"), dict):
+        raise erreur("« style_selection » absent")
+
+    declarations = cfg.get("couches_fichiers")
+    if declarations is None:
+        cfg["couches_fichiers"] = declarations = []
+    if not isinstance(declarations, list):
+        raise erreur("« couches_fichiers » doit être une liste")
+    for i, d in enumerate(declarations, 1):
+        if not isinstance(d, dict) or not isinstance(d.get("fichier"), str):
+            raise erreur(f"« couches_fichiers » n° {i} : clé « fichier » absente")
+        if "style" in d and not isinstance(d["style"], dict):
+            raise erreur(f"« couches_fichiers » n° {i} ({d['fichier']}) : « style » doit être un dictionnaire")
     return cfg
+
+
+def dossier_sig(cfg: dict) -> Path:
+    """Dossier des couches fichiers, relatif à la racine du projet sauf s'il est absolu."""
+    p = Path(cfg["donnees"]["dossier_sig"])
+    return p if p.is_absolute() else RACINE / p
 
 
 def charger_config(chemin: Path = CHEMIN_CONFIG) -> dict:
