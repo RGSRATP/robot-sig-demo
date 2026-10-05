@@ -1,7 +1,9 @@
 @echo off
 rem Lance le démonstrateur SIG : construit l'interface si besoin, démarre le serveur et ouvre le navigateur.
-rem Pour reconstruire l'interface après une modification : « lancer build ».
+rem L'interface est reconstruite automatiquement si une source est plus récente que la dernière construction.
+rem Pour forcer la reconstruction : « lancer build ».
 chcp 65001 > nul
+setlocal
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
@@ -13,6 +15,16 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 if /i "%~1"=="build" rmdir /s /q "interface\dist" 2> nul
+
+rem Interface construite mais plus ancienne que ses sources : on la reconstruit.
+if exist "interface\dist\index.html" (
+  powershell -NoProfile -Command "$d = (Get-Item 'interface\dist\index.html').LastWriteTime; $s = Get-ChildItem 'interface\sig','interface\main.js','interface\index.html','interface\vite.config.js','interface\package.json' -Recurse -File | Where-Object { $_.LastWriteTime -gt $d }; if ($s) { exit 1 }"
+  if errorlevel 1 (
+    echo Sources de l'interface modifiées depuis la dernière construction.
+    rmdir /s /q "interface\dist" 2> nul
+  )
+)
+
 if not exist "interface\dist\index.html" (
   echo Construction de l'interface...
   pushd interface
@@ -26,13 +38,25 @@ if not exist "interface\dist\index.html" (
   )
 )
 
-rem Un serveur déjà lancé (ancienne version) occuperait le port : le navigateur s'ouvrirait dessus.
-netstat -ano | findstr /r /c:":8000 .*LISTENING" > nul
-if not errorlevel 1 (
-  echo Un serveur occupe déjà le port 8000, probablement un démonstrateur lancé précédemment.
-  echo Fermez sa fenêtre ^(ou Ctrl+C dedans^), puis relancez « lancer ».
-  pause
-  exit /b 1
+rem Un serveur déjà lancé (ancienne version) occupe le port : le navigateur s'ouvrirait dessus.
+set "PID="
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":8000 .*LISTENING"') do set "PID=%%p"
+if defined PID (
+  tasklist /fi "PID eq %PID%" /nh | findstr /i "python" > nul
+  if errorlevel 1 (
+    echo Le port 8000 est occupé par une autre application ^(processus %PID%^) : libérez-le puis relancez.
+    pause
+    exit /b 1
+  )
+  echo Un ancien serveur du démonstrateur tourne encore sur le port 8000 ^(processus %PID%^).
+  choice /c ON /m "L'arrêter et lancer la version actuelle"
+  if errorlevel 2 (
+    echo Lancement annulé : l'ancien serveur reste actif.
+    pause
+    exit /b 1
+  )
+  taskkill /pid %PID% /f > nul
+  timeout /t 2 /nobreak > nul
 )
 
 echo.
