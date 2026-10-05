@@ -1,0 +1,8 @@
+# Géoréférencement manuel, utilisé seulement si la maquette n'a ni IfcMapConversion
+# ni coordonnées exploitables dans l'IfcSite.
+maquettes: []
+#  - fichier: "gc_station_xxx.ifc"
+#    x_l93: 652000.00       # point d'insertion, Lambert 93 (m)
+#    y_l93: 6862000.00
+#    altitude_ngf: 35.0
+#    rotation_deg: 0.0      # rotation du nord du projet par rapport au nord Lambert

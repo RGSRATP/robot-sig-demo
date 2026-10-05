@@ -1,0 +1,32 @@
+# Données : restent sur le poste, jamais publiées (seul le fichier d'explication est versionné)
+/donnees/*
+!/donnees/LISEZMOI.md
+
+# Cache des services et fichiers produits par l'application
+cache/
+
+# Environnements et dépendances
+.venv/
+node_modules/
+
+# Builds et caches
+interface/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets éventuels
+.env
+.env.*
+*.key
+*.pem
+
+# Poste et éditeurs
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.log
+
+# Réglages locaux de Claude Code
+.claude/settings.local.json

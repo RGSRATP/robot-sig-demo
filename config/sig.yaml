@@ -1,0 +1,39 @@
+# Configuration du module SIG — aucun de ces paramètres ne doit être en dur dans le code.
+
+carte:
+  centre_wgs84: [2.35, 48.85]   # Île-de-France
+  zoom_initial: 10
+  systeme_donnees_attendu: "EPSG:2154"
+
+fonds_ign:   # Géoplateforme IGN, WMTS — URL à vérifier au lot 0
+  defaut: plan
+  plan:
+    libelle: "Plan IGN v2"
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/png&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+    attribution: "© IGN Géoplateforme"
+  ortho:
+    libelle: "Orthophotos"
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+    attribution: "© IGN Géoplateforme"
+
+chargement:
+  seuil_objets_filtre_emprise: 20000   # au-delà, chargement limité à l'emprise affichée
+
+# Couches fichiers : détectées automatiquement dans donnees/sig/.
+# Déclarer ici uniquement les surcharges (style, libellé) et les CSV.
+couches_fichiers: []
+#  - fichier: "gares.gpkg"
+#    couche: "gares"            # nom de la couche dans le GeoPackage
+#    libelle: "Gares"
+#    style: { couleur: "#0a7d3b", epaisseur: 2 }
+#  - fichier: "points_releves.csv"
+#    colonne_x: "X"
+#    colonne_y: "Y"
+#    systeme: "EPSG:2154"
+#    separateur: ";"
+
+# Services Esri (InfraGéo) — identifiants éventuels dans .env, jamais ici.
+services_esri: []
+#  - libelle: "Ouvrages"
+#    url: "https://<portail>/arcgis/rest/services/<service>/FeatureServer/0"
+#    cache_heures: 24
