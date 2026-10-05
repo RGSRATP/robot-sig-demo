@@ -16,6 +16,21 @@ if not exist ".venv\Scripts\python.exe" (
 
 if /i "%~1"=="build" rmdir /s /q "interface\dist" 2> nul
 
+rem Dépendances de l'interface absentes ou package.json modifié (nouvelle bibliothèque) : npm install.
+set "INSTALLER="
+if not exist "interface\node_modules\.package-lock.json" set "INSTALLER=1"
+if not defined INSTALLER (
+  powershell -NoProfile -Command "if ((Get-Item 'interface\package.json').LastWriteTime -gt (Get-Item 'interface\node_modules\.package-lock.json').LastWriteTime) { exit 1 }"
+  if errorlevel 1 set "INSTALLER=1"
+)
+if defined INSTALLER (
+  echo Installation des dépendances de l'interface...
+  pushd interface
+  call npm install --proxy http://127.0.0.1:9000 --https-proxy http://127.0.0.1:9000
+  popd
+  rmdir /s /q "interface\dist" 2> nul
+)
+
 rem Interface construite mais plus ancienne que ses sources : on la reconstruit.
 if exist "interface\dist\index.html" (
   powershell -NoProfile -Command "$d = (Get-Item 'interface\dist\index.html').LastWriteTime; $s = Get-ChildItem 'interface\sig','interface\main.js','interface\index.html','interface\vite.config.js','interface\package.json' -Recurse -File | Where-Object { $_.LastWriteTime -gt $d }; if ($s) { exit 1 }"
@@ -28,7 +43,6 @@ if exist "interface\dist\index.html" (
 if not exist "interface\dist\index.html" (
   echo Construction de l'interface...
   pushd interface
-  if not exist "node_modules" call npm install
   call npm run build
   popd
   if not exist "interface\dist\index.html" (

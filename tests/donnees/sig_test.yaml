@@ -66,13 +66,16 @@ couches_fichiers:
   - fichier: "absent.gpkg"
     libelle: "Déclaré mais absent"
 
+# Appels sortants du serveur (services Esri, altimétrie IGN)
+reseau:
+  proxy: null
+  certificats: null                  # null : magasin de certificats du poste ; sinon fichier .pem d'autorités
+  delai_secondes: 5                  # délai maximal d'une requête
+
 # Services Esri : faux serveur des tests (tests/sig/faux_arcgis.py), aucun accès réseau.
 esri:
   dossier_cache: "cache/esri_test"      # remplacé par un dossier temporaire pendant les tests
   dossier_exports: "tests/donnees/jeu"  # exports de repli
-  proxy: null
-  certificats: null
-  delai_secondes: 5
   max_objets: 1000
   cache_heures_defaut: 24
   nouvel_essai_minutes: 10

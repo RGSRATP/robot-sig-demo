@@ -8,13 +8,16 @@ import platform
 from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from . import config as cfg_sig
 from . import esri as esri_sig
 from . import inventaire as inv_sig
+from . import maquettes as maq_sig
 from . import objets as obj_sig
+from commun.ifc import proprietes as proprietes_ifc
 
-VERSION = "0.3.0 (lot 2)"
+VERSION = "0.4.0 (lot 3)"
 
 routeur = APIRouter(prefix="/api/sig", tags=["sig"])
 
@@ -168,3 +171,58 @@ def recherche(id_couche: str, q: str = Query(..., min_length=1), cfg: dict = Dep
         return obj_sig.rechercher(couche, q, int(cfg["chargement"]["max_resultats_recherche"]))
     except inv_sig.AnomalieCouche as e:
         raise _anomalie(e, couche)
+
+
+# ---------------------------------------------------------------- maquettes IFC (lot 3)
+
+def _config_maquettes() -> dict:
+    try:
+        return maq_sig.config()
+    except maq_sig.ConfigMaquettesInvalide as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@routeur.get("/maquettes")
+def maquettes(cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    """Maquettes du dossier IFC : état du traitement, métadonnées, positionnement (méthode, emprise, calage)."""
+    return maq_sig.inventaire(cfg, cfgm)
+
+
+@routeur.get("/maquettes/emprises")
+def maquettes_emprises(cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    return maq_sig.emprises(maq_sig.inventaire(cfg, cfgm))
+
+
+def _maquette_traitee(id_maquette: str, cfgm: dict) -> tuple[str, dict]:
+    trouve = maq_sig.chemin_maquette(cfgm, id_maquette)
+    if trouve is None:
+        raise HTTPException(status_code=404, detail=f"maquette inconnue : {id_maquette}")
+    rel, chemin = trouve
+    if maq_sig.resultat(cfgm, id_maquette, maq_sig.cle_traitement(chemin, cfgm)) is None:
+        raise HTTPException(status_code=409, detail=f"{rel} : traitement non terminé")
+    return rel, chemin
+
+
+@routeur.get("/maquettes/{id_maquette}/modele.glb")
+def maquette_modele(id_maquette: str, cfgm: dict = Depends(_config_maquettes)):
+    _maquette_traitee(id_maquette, cfgm)
+    return FileResponse(maq_sig.dossier_cache(cfgm, id_maquette) / "modele.glb", media_type="model/gltf-binary")
+
+
+@routeur.get("/maquettes/{id_maquette}/objets/{guid}")
+def maquette_objet(id_maquette: str, guid: str, cfgm: dict = Depends(_config_maquettes)):
+    rel, _ = _maquette_traitee(id_maquette, cfgm)
+    fiche = proprietes_ifc.lire_fiche(maq_sig.dossier_cache(cfgm, id_maquette) / "proprietes.sqlite", guid)
+    if fiche is None:
+        raise HTTPException(status_code=404, detail=f"objet {guid} absent de {rel}")
+    return fiche
+
+
+@routeur.post("/maquettes/{id_maquette}/recalculer")
+def maquette_recalculer(id_maquette: str, cfg: dict = Depends(_config_valide),
+                        cfgm: dict = Depends(_config_maquettes)):
+    trouve = maq_sig.chemin_maquette(cfgm, id_maquette)
+    if trouve is None:
+        raise HTTPException(status_code=404, detail=f"maquette inconnue : {id_maquette}")
+    maq_sig.traitements.relancer(cfgm, id_maquette, trouve[1])
+    return maq_sig.inventaire(cfg, cfgm)

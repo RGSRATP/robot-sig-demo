@@ -282,7 +282,7 @@ def test_config_service_en_double(cfg_test):
 
 def test_config_projet_valide():
     cfg = charger_config()
-    assert cfg["services_esri"] and cfg["esri"]["proxy"]
+    assert cfg["services_esri"] and cfg["reseau"]["proxy"]
 
 
 # ---------------------------------------------------------------- API

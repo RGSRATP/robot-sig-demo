@@ -1,76 +1,165 @@
-// Carte SIG : MapLibre GL sur les fonds IGN déclarés dans config/sig.yaml (servis par /api/sig/config/carte),
-// panneau latéral (fonds, couches, recherche, anomalies) et fiche des objets.
+// Carte SIG + BIM : MapLibre GL sur les fonds IGN déclarés dans config/sig.yaml (servis par /api/sig/config/carte),
+// couches SIG (fichiers, services Esri), maquettes IFC en 3D dans la carte, volets d'outils et de propriétés.
 // Aucune URL ni coordonnée en dur : tout vient de la configuration du serveur.
-import { Map as CarteMapLibre, NavigationControl, ScaleControl } from 'maplibre-gl';
+import { Map as CarteMapLibre, ScaleControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './carte.css';
 import { lire } from './api.js';
 import { GestionnaireCouches } from './couches.js';
-import { monterFiche } from './fiche.js';
+import { fermerFiche, monterFiche } from './fiche.js';
+import { versLambert93 } from './lambert93.js';
+import { GestionnaireMaquettes } from './maquettes.js';
+import { bouton, creerCoque, el, icone } from './ui.js';
+import { CoucheMaquettes3D } from './vue3d.js';
 
-const SEUIL_ECHECS_FOND = 3; // tuiles en échec d'affilée avant d'annoncer le fond indisponible
+const SEUIL_ECHECS_FOND = 3;   // tuiles en échec d'affilée avant d'annoncer le fond indisponible
+const INCLINAISON_3D = 60;     // inclinaison (degrés) du bouton « 3D »
+const INCLINAISON_MAX = 85;
 
 function bandeau(racine) {
-  const el = document.createElement('div');
-  el.className = 'sig-bandeau';
-  el.hidden = true;
-  racine.appendChild(el);
+  const b = el('div', { className: 'sig-bandeau', role: 'status' });
+  b.hidden = true;
+  racine.append(b);
   return {
     montrer(texte, erreur = false) {
-      el.textContent = texte;
-      el.classList.toggle('sig-bandeau--erreur', erreur);
-      el.hidden = false;
+      b.textContent = texte;
+      b.classList.toggle('sig-bandeau--erreur', erreur);
+      b.hidden = false;
     },
-    cacher() { el.hidden = true; },
+    cacher() { b.hidden = true; },
   };
 }
 
 function styleInitial(cfg) {
   const sources = {};
-  const layers = [{ id: 'sig-vide', type: 'background', paint: { 'background-color': '#f2efe9' } }];
+  const layers = [{ id: 'sig-vide', type: 'background', paint: { 'background-color': '#eef0f2' } }];
   for (const f of cfg.fonds) {
-    sources[`fond-${f.id}`] = { type: 'raster', tiles: [f.url], tileSize: 256, attribution: f.attribution };
-    layers.push({
-      id: `fond-${f.id}`,
-      type: 'raster',
-      source: `fond-${f.id}`,
-      layout: { visibility: f.id === cfg.fond_defaut ? 'visible' : 'none' },
-    });
+    sources[`fond-${f.id}`] = { type: 'raster', tiles: [f.url], tileSize: 256, attribution: f.attribution, maxzoom: 19 };
+    layers.push({ id: `fond-${f.id}`, type: 'raster', source: `fond-${f.id}`,
+      layout: { visibility: f.id === cfg.fond_defaut ? 'visible' : 'none' } });
   }
   return { version: 8, sources, layers };
 }
 
-function selecteurFonds(cfg, choisir) {
-  const boite = document.createElement('details');
-  boite.className = 'sig-bloc';
-  boite.open = true;
-  boite.innerHTML = '<summary><h2>Fond de carte</h2></summary>';
-  const groupe = document.createElement('div');
-  groupe.className = 'sig-fonds';
-  for (const f of [...cfg.fonds, { id: '', libelle: 'Aucun' }]) {
-    const label = document.createElement('label');
-    const radio = Object.assign(document.createElement('input'), {
-      type: 'radio', name: 'sig-fond', value: f.id, checked: f.id === cfg.fond_defaut,
-    });
+// ---------------------------------------------------------------- volets simples
+
+function voletFonds(conteneur, cfg, choisir) {
+  const groupe = el('div', { className: 'sig-galerie' });
+  for (const f of [...cfg.fonds, { id: '', libelle: 'Aucun fond' }]) {
+    const radio = el('input', { type: 'radio', name: 'sig-fond', value: f.id, checked: f.id === cfg.fond_defaut });
     radio.addEventListener('change', () => choisir(f.id));
-    label.append(radio, ` ${f.libelle}`);
-    groupe.appendChild(label);
+    groupe.append(el('label', { className: 'sig-galerie__choix' }, radio,
+      el('span', { className: `sig-galerie__vignette sig-galerie__vignette--${f.id || 'aucun'}` }),
+      el('span', { textContent: f.libelle })));
   }
-  boite.appendChild(groupe);
-  return boite;
+  conteneur.append(groupe, el('p', { className: 'sig-info', textContent: 'Fonds de la Géoplateforme IGN, appelés par le navigateur.' }));
 }
 
+function voletVue3d(conteneur, carte, c3d, maquettes, appliquerTransparence) {
+  const ligne = (libelle, ...controles) => el('div', { className: 'sig-reglage' }, el('span', { className: 'sig-reglage__libelle', textContent: libelle }), ...controles);
+
+  const transparence = el('input', { type: 'range', min: 0, max: 0.9, step: 0.05, value: 0 });
+  const valT = el('output', { textContent: '0 %' });
+  transparence.addEventListener('input', () => {
+    appliquerTransparence(Number(transparence.value));
+    valT.textContent = `${Math.round(Number(transparence.value) * 100)} %`;
+  });
+
+  const coupeActive = el('input', { type: 'checkbox' });
+  const coupe = el('input', { type: 'range', min: -40, max: 40, step: 0.5, value: 0, disabled: true });
+  const valC = el('output', { textContent: '—' });
+  const majBornes = () => {
+    const h = maquettes.hauteurs();
+    if (h) { coupe.min = h[0]; coupe.max = h[1]; }
+  };
+  const appliquerCoupe = () => {
+    coupe.disabled = !coupeActive.checked;
+    c3d.definirCoupe(coupeActive.checked ? Number(coupe.value) : null);
+    valC.textContent = coupeActive.checked ? `${Number(coupe.value).toLocaleString('fr-FR')} m` : '—';
+  };
+  coupeActive.addEventListener('change', () => { majBornes(); appliquerCoupe(); });
+  coupe.addEventListener('input', appliquerCoupe);
+
+  const vues = el('div', { className: 'sig-groupe-boutons' });
+  const vue = (texte, options) => {
+    const b = el('button', { type: 'button', className: 'sig-bouton', textContent: texte });
+    b.addEventListener('click', () => carte.easeTo({ ...options, duration: 800 }));
+    vues.append(b);
+  };
+  vue('Dessus', { pitch: 0, bearing: 0 });
+  vue('Oblique', { pitch: INCLINAISON_3D });
+  vue('Rasante', { pitch: 80 });
+
+  conteneur.append(
+    el('section', { className: 'sig-section' }, el('h3', { textContent: 'Point de vue' }), vues,
+      el('p', { className: 'sig-info', textContent: 'Clic droit + glisser (ou Ctrl + glisser) pour incliner et tourner la vue.' })),
+    el('section', { className: 'sig-section' }, el('h3', { textContent: 'Sous-sol' }),
+      ligne('Transparence du fond de carte', transparence, valT),
+      el('p', { className: 'sig-info', textContent: 'Rend le fond translucide pour lire les ouvrages enterrés sous la ville.' })),
+    el('section', { className: 'sig-section' }, el('h3', { textContent: 'Coupe horizontale' }),
+      ligne('Couper au-dessus de', coupeActive, coupe, valC),
+      el('p', { className: 'sig-info', textContent: 'Hauteur par rapport au terrain naturel (RGE ALTI). Les objets au-dessus sont masqués.' })),
+  );
+  return { majBornes };
+}
+
+// ---------------------------------------------------------------- contrôles de carte
+
+function controles(zone, carte, cfg) {
+  const boussole = bouton('boussole', 'Réorienter au nord', () => carte.easeTo({ bearing: 0, duration: 500 }));
+  const b3d = el('button', { type: 'button', className: 'sig-bouton-icone sig-bouton-icone--texte', title: 'Basculer vue de dessus / vue 3D', textContent: '3D' });
+  b3d.addEventListener('click', () => carte.easeTo({ pitch: carte.getPitch() > 5 ? 0 : INCLINAISON_3D, duration: 700 }));
+  const groupe = el('div', { className: 'sig-controles' },
+    el('div', { className: 'sig-controles__groupe' },
+      bouton('plus', 'Zoom avant', () => carte.zoomIn()),
+      bouton('moins', 'Zoom arrière', () => carte.zoomOut())),
+    el('div', { className: 'sig-controles__groupe' }, boussole, b3d),
+    el('div', { className: 'sig-controles__groupe' },
+      bouton('accueil', 'Vue initiale', () => carte.flyTo({ center: cfg.centre_wgs84, zoom: cfg.zoom_initial, pitch: 0, bearing: 0 }))));
+  zone.append(groupe);
+  const maj = () => {
+    boussole.firstChild.style.transform = `rotate(${-carte.getBearing()}deg)`;
+    b3d.textContent = carte.getPitch() > 5 ? '2D' : '3D';
+  };
+  carte.on('rotate', maj);
+  carte.on('pitch', maj);
+  maj();
+}
+
+function piedDePage(pied, carte) {
+  const coords = el('span', { className: 'sig-pied__coords', textContent: 'Lambert 93 —' });
+  const vue = el('span', { className: 'sig-pied__vue' });
+  pied.append(coords, vue);
+  const nf = (v, d = 2) => v.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
+  carte.on('mousemove', (e) => {
+    const [x, y] = versLambert93(e.lngLat.lng, e.lngLat.lat);
+    coords.textContent = `Lambert 93  X ${nf(x)}  Y ${nf(y)}   ·   WGS84 ${nf(e.lngLat.lat, 6)}° N ${nf(e.lngLat.lng, 6)}° E`;
+  });
+  const majVue = () => {
+    vue.textContent = `Zoom ${nf(carte.getZoom(), 1)} · Inclinaison ${Math.round(carte.getPitch())}° · Orientation ${Math.round((carte.getBearing() + 360) % 360)}°`;
+  };
+  carte.on('move', majVue);
+  majVue();
+}
+
+// ---------------------------------------------------------------- montage
+
 export async function monterCarte(conteneur) {
-  const racine = document.createElement('div');
-  racine.className = 'sig-racine';
-  const cote = document.createElement('aside');
-  cote.className = 'sig-panneau';
-  cote.innerHTML = '<header class="sig-panneau__tete"><h1>Carte SIG</h1></header>';
-  const zone = document.createElement('div');
-  zone.className = 'sig-zone';
-  racine.append(cote, zone);
-  conteneur.appendChild(racine);
-  const message = bandeau(zone);
+  const coque = creerCoque(conteneur, { titre: 'Démonstrateur SIG · BIM', sousTitre: 'Carte, couches et maquettes IFC' });
+  const message = bandeau(coque.zone);
+  const g = coque.gauche;
+  const d = coque.droite;
+  const pCouches = g.ajouter('couches', 'Couches', 'couches');
+  const pMaquettes = g.ajouter('maquettes', 'Maquettes', 'maquettes');
+  const pFonds = g.ajouter('fonds', 'Fonds de carte', 'fonds');
+  const pRecherche = g.ajouter('recherche', 'Recherche', 'recherche');
+  const pAnomalies = g.ajouter('anomalies', 'Anomalies', 'anomalies');
+  const anomaliesCouches = el('div');
+  const anomaliesMaquettes = el('div');
+  pAnomalies.append(anomaliesMaquettes, anomaliesCouches);
+  const pProprietes = d.ajouter('proprietes', 'Propriétés', 'proprietes');
+  const pVue3d = d.ajouter('vue3d', 'Vue 3D', 'vue3d');
+  monterFiche(pProprietes, { ouvrir: () => d.ouvrir('proprietes'), fermer: () => { if (d.actif === 'proprietes') d.ouvrir(null); } });
 
   let cfg;
   try {
@@ -80,20 +169,21 @@ export async function monterCarte(conteneur) {
     return null;
   }
 
-  const divCarte = document.createElement('div');
-  divCarte.className = 'sig-carte';
-  zone.prepend(divCarte);
-  monterFiche(zone);
-
+  const divCarte = el('div', { className: 'sig-carte' });
+  coque.zone.prepend(divCarte);
   const carte = new CarteMapLibre({
     container: divCarte,
     style: styleInitial(cfg),
     center: cfg.centre_wgs84,
     zoom: cfg.zoom_initial,
-    attributionControl: { compact: false },
+    maxPitch: INCLINAISON_MAX,
+    attributionControl: { compact: true },
+    canvasContextAttributes: { antialias: true },
   });
-  carte.addControl(new NavigationControl(), 'top-right');
   carte.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left');
+  controles(coque.zone, carte, cfg);
+  piedDePage(coque.pied, carte);
+  coque.surRedimension(() => requestAnimationFrame(() => carte.resize()));
 
   // Fond indisponible : la carte reste utilisable, un message l'indique.
   let fondActif = cfg.fond_defaut;
@@ -111,20 +201,79 @@ export async function monterCarte(conteneur) {
       message.cacher();
     }
   });
-
-  const panneauCouches = document.createElement('div');
-  cote.append(selecteurFonds(cfg, (id) => {
-    for (const f of cfg.fonds) {
-      carte.setLayoutProperty(`fond-${f.id}`, 'visibility', f.id === id ? 'visible' : 'none');
-    }
+  let transparenceSol = 0;
+  const appliquerTransparence = (t) => {
+    transparenceSol = t;
+    for (const f of cfg.fonds) carte.setPaintProperty(`fond-${f.id}`, 'raster-opacity', 1 - t);
+    carte.setPaintProperty('sig-vide', 'background-opacity', 1 - t);
+  };
+  voletFonds(pFonds, cfg, (id) => {
+    for (const f of cfg.fonds) carte.setLayoutProperty(`fond-${f.id}`, 'visibility', f.id === id ? 'visible' : 'none');
     fondActif = id;
     echecs = 0;
     message.cacher();
-  }), panneauCouches);
+    appliquerTransparence(transparenceSol);
+  });
 
-  const gestionnaire = new GestionnaireCouches(carte, panneauCouches, cfg.style_selection);
-  if (carte.loaded()) gestionnaire.demarrer();
-  else carte.once('load', () => gestionnaire.demarrer());
+  const pastilleMaquettes = coque.pastille('Maquettes…');
+  const couches = new GestionnaireCouches(carte, { couches: pCouches, recherche: pRecherche, anomalies: anomaliesCouches },
+    cfg.style_selection, { surAnomalies: () => majBadge() });
+  const c3d = new CoucheMaquettes3D();
+  const maquettes = new GestionnaireMaquettes(carte, c3d, {
+    panneau: pMaquettes,
+    anomalies: anomaliesMaquettes,
+    surSelection: () => couches.deselectionner(false),
+    surEtat: ({ total, enCours, courant }) => {
+      pastilleMaquettes.textContent = enCours
+        ? `Maquettes : traitement ${total - enCours + 1}/${total}${courant ? ` (${courant.etat.progression ?? 0} %)` : ''}`
+        : `Maquettes : ${total} traitée(s)`;
+      pastilleMaquettes.classList.toggle('sig-pastille-etat--actif', enCours > 0);
+      g.badge('maquettes', enCours, false);
+      majBadge();
+    },
+  });
+  const vue3d = voletVue3d(pVue3d, carte, c3d, maquettes, appliquerTransparence);
+  function majBadge() {
+    const n = (couches.inventaire?.anomalies.length || 0) + (maquettes.nbAnomalies || 0);
+    g.badge('anomalies', n, true);
+  }
+  d.panneaux.get('vue3d').bouton.addEventListener('click', () => vue3d.majBornes());
 
+  // Répartition des clics : objet de maquette 3D, puis objet SIG, puis emprise de maquette.
+  carte.on('click', (e) => {
+    const cible3d = c3d.objetSous(e.point);
+    if (cible3d) {
+      couches.deselectionner(false);
+      maquettes.ouvrirObjet(cible3d);
+      return;
+    }
+    const sig = couches.objetSous(e.point);
+    if (sig) {
+      maquettes.deselectionner();
+      couches.ouvrirObjet(sig.id, sig.n);
+      return;
+    }
+    const emprise = maquettes.empriseSous(e.point);
+    if (emprise) {
+      couches.deselectionner(false);
+      maquettes.ouvrirFiche(emprise);
+      return;
+    }
+    couches.deselectionner(false);
+    maquettes.deselectionner();
+    fermerFiche();
+  });
+  carte.on('mousemove', (e) => {
+    const touche = couches.objetSous(e.point) || maquettes.empriseSous(e.point);
+    carte.getCanvas().style.cursor = touche ? 'pointer' : '';
+  });
+
+  const demarrer = async () => {
+    await couches.demarrer();
+    await maquettes.demarrer();
+  };
+  if (carte.loaded()) demarrer();
+  else carte.once('load', demarrer);
+  g.ouvrir('couches');
   return carte;
 }

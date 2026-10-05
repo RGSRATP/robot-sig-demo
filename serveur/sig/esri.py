@@ -14,7 +14,6 @@ import json
 import math
 import os
 import re
-import ssl
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -27,6 +26,7 @@ from pyproj.exceptions import CRSError
 from shapely.geometry import LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon
 
 from . import inventaire as inv_sig
+from . import reseau
 from .config import RACINE
 
 MOTIF_URL = re.compile(r"^https?://.+/(FeatureServer|MapServer)/\d+/?$", re.IGNORECASE)
@@ -70,18 +70,8 @@ def _lire_env(nom: str) -> str | None:
 
 
 def fabrique_client(cfg: dict) -> httpx.Client:
-    """Client HTTP du connecteur (remplacé par un faux serveur dans les tests).
-
-    Certificats : magasin du système (Windows), qui contient l'autorité du proxy d'entreprise,
-    ou fichier déclaré dans « esri.certificats ». La vérification n'est jamais désactivée.
-    """
-    e = cfg["esri"]
-    certificats = e.get("certificats")
-    if certificats and not Path(certificats).is_absolute():
-        certificats = str(RACINE / certificats)
-    contexte = ssl.create_default_context(cafile=certificats or None)
-    return httpx.Client(proxy=e.get("proxy") or None, timeout=float(e["delai_secondes"]), verify=contexte,
-                        trust_env=not e.get("proxy"), follow_redirects=True)
+    """Client HTTP du connecteur (remplacé par un faux serveur dans les tests)."""
+    return reseau.client(cfg)
 
 
 # ---------------------------------------------------------------- dialogue avec le service
@@ -96,15 +86,8 @@ class _Session:
             donnees["token"] = self.jeton
         try:
             r = self.client.post(self.url + suffixe, data=donnees)
-        except httpx.TimeoutException:
-            raise ErreurService("service injoignable (délai dépassé)") from None
         except httpx.HTTPError as e:
-            if "CERTIFICATE_VERIFY_FAILED" in str(e):
-                raise ErreurService("certificat du service non reconnu par le poste "
-                                    "(autorité à déclarer dans « esri.certificats »)") from None
-            if isinstance(e, httpx.ProxyError):
-                raise ErreurService("proxy injoignable ou refus du proxy (« esri.proxy » à vérifier)") from None
-            raise ErreurService(f"service injoignable ({type(e).__name__})") from None
+            raise ErreurService(f"service {reseau.message_erreur(e)}") from None
         if r.status_code in (401, 403):
             raise ErreurService(f"accès refusé (HTTP {r.status_code}) : jeton absent, invalide ou expiré")
         if r.status_code >= 400:

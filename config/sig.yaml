@@ -55,13 +55,16 @@ couches_fichiers: []
 #    separateur: ";"
 #    encodage: "utf-8"
 
+# Appels sortants du serveur (services Esri, altimétrie IGN)
+reseau:
+  proxy: "http://127.0.0.1:9000"     # null : connexion directe (ou variables HTTPS_PROXY du poste)
+  certificats: null                  # null : magasin de certificats du poste ; sinon fichier .pem d'autorités
+  delai_secondes: 30                  # délai maximal d'une requête
+
 # Services Esri (ArcGIS REST) — interrogés par le serveur, à travers le proxy ci-dessous.
 esri:
   dossier_cache: "cache/esri"        # couches téléchargées (GeoPackage + fiche JSON), hors Git
   dossier_exports: "donnees/esri"    # exports de repli quand un service est injoignable
-  proxy: "http://127.0.0.1:9000"     # null : connexion directe (ou variables HTTPS_PROXY du poste)
-  certificats: null                  # null : magasin de certificats du poste ; sinon fichier .pem d'autorités
-  delai_secondes: 30                 # délai maximal d'une requête
   max_objets: 100000                 # garde-fou par couche (au-delà : couche tronquée, signalée)
   cache_heures_defaut: 24            # durée de validité du cache si le service ne précise pas « cache_heures »
   nouvel_essai_minutes: 10           # après un échec, délai avant de réessayer le service

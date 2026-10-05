@@ -1,8 +1,51 @@
-# Géoréférencement manuel, utilisé seulement si la maquette n'a ni IfcMapConversion
-# ni coordonnées exploitables dans l'IfcSite.
+# Maquettes IFC : dossier, traitement, positionnement sur la carte.
+# Aucun système n'est jamais supposé : il est lu dans la maquette, identifié, ou déclaré ici.
+
+dossier_ifc: "donnees/ifc"         # relatif à la racine du projet ; parcouru avec ses sous-dossiers
+dossier_cache: "cache/ifc"         # modèles 3D (GLB), emprises et index des propriétés, hors Git
+
+traitement:
+  deflexion_lineaire_m: 0.02       # finesse des surfaces courbes du modèle 3D (plus grand = plus léger)
+  exclure: ["IfcSpace", "IfcOpeningElement", "IfcAnnotation", "IfcGrid", "IfcVirtualElement"]
+  simplification_emprise_m: 0.05   # tolérance de simplification de l'emprise au sol
+  delai_max_minutes: 90            # au-delà, le traitement d'une maquette est interrompu et signalé
+
+affichage_3d:
+  chargement_automatique_max_mo: 25   # modèles 3D plus lourds : chargés à la demande (bouton)
+
+# Identification du système des coordonnées projetées portées par l'IfcSite (coordonnées partagées) :
+# le système candidat retenu est celui où RefLatitude/RefLongitude tombent à moins de « tolerance_m » du site.
+identification:
+  systemes_candidats: ["EPSG:2154", "EPSG:3942", "EPSG:3943", "EPSG:3944", "EPSG:3945", "EPSG:3946",
+                       "EPSG:3947", "EPSG:3948", "EPSG:3949", "EPSG:3950"]
+  tolerance_m: 2000
+  # RefLatitude/RefLongitude hors de cette emprise (ouest, sud, est, nord) : valeur par défaut du logiciel, ignorées
+  emprise_plausible_wgs84: [1.40, 48.10, 3.60, 49.30]
+
+# Calage vertical : les maquettes sont posées par rapport au terrain (RGE ALTI de l'IGN, interrogé par le serveur).
+altimetrie:
+  url: "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json"
+  ressource: "ign_rge_alti_wld"
+  ecart_max_terrain_m: 80          # au-delà, l'altitude de la maquette est jugée incohérente avec le terrain
+
+# Déclarations explicites du système des coordonnées projetées du site, par dossier (motif relatif à dossier_ifc).
+# Une déclaration ne remplace pas un système identifié dans la maquette ; elle sert quand RefLatitude/RefLongitude
+# sont absentes ou fausses (valeur par défaut de Revit : Boston, Paris…).
+systemes_declares:
+  - motif: "L18/**"
+    systeme: "EPSG:3949"
+    justification: >-
+      Déclaration du 2026-10-05 : toutes les maquettes L18 dont RefLatitude/RefLongitude sont exploitables
+      identifient le CC49 (coordonnées partagées Revit) ; les autres portent la position par défaut de Revit
+      (Boston, Paris) mais des coordonnées de site dans le domaine du CC49.
+
+# Saisie manuelle (dernier recours, ou prioritaire avec « forcer: true ») : point d'insertion de l'origine du site
+# IFC, rotation (degrés, sens trigonométrique, axe X de la maquette par rapport à l'Est), altitude NGF de l'origine.
+# Clé facultative pour toute maquette : decalage_vertical_m (ajouté à l'altitude affichée).
 maquettes: []
-#  - fichier: "gc_station_xxx.ifc"
-#    x_l93: 652000.00       # point d'insertion, Lambert 93 (m)
-#    y_l93: 6862000.00
-#    altitude_ngf: 35.0
-#    rotation_deg: 0.0      # rotation du nord du projet par rapport au nord Lambert
+#  - fichier: "L18/Gare/xxx.ifc"
+#    x: 646310.0
+#    y: 6852080.0
+#    systeme: "EPSG:2154"
+#    altitude: 155.0
+#    rotation_deg: 0

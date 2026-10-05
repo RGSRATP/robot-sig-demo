@@ -1,0 +1,32 @@
+# Configuration de test des maquettes : jeu tests/donnees/ifc/ (généré par generer_ifc.py).
+dossier_ifc: "tests/donnees/ifc"
+dossier_cache: "cache/ifc_test"      # remplacé par un dossier temporaire pendant les tests
+
+traitement:
+  deflexion_lineaire_m: 0.02
+  exclure: ["IfcSpace", "IfcOpeningElement", "IfcAnnotation", "IfcGrid", "IfcVirtualElement"]
+  simplification_emprise_m: 0.05
+  delai_max_minutes: 5
+
+affichage_3d:
+  chargement_automatique_max_mo: 25
+
+identification:
+  systemes_candidats: ["EPSG:2154", "EPSG:3949"]
+  tolerance_m: 2000
+  emprise_plausible_wgs84: [1.40, 48.10, 3.60, 49.30]
+
+altimetrie:
+  url: "https://altimetrie.test/elevation.json"   # faux service des tests
+  ressource: "ign_rge_alti_wld"
+  ecart_max_terrain_m: 80
+
+systemes_declares: []
+
+maquettes:
+  - fichier: "methode3_manuelle.ifc"
+    x: 650000.0
+    y: 6860000.0
+    altitude: 90.0
+    rotation_deg: 30
+    decalage_vertical_m: 1.5

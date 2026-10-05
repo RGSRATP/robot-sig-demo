@@ -2,15 +2,18 @@
 
 Ne dépend ni de serveur/, ni d'interface/, ni de config/ : entrées explicites, sorties sérialisables en JSON.
 
-Contenu prévu :
-- lot 3 : métadonnées, géoréférencement (IfcMapConversion, IfcSite, manuel transmis par l'appelant), emprise au sol ;
-- lot 4 : locaux (IfcSpace) et Psets (dont « Données d'identification »).
+Contenu :
+- lecture : ouverture contrôlée, métadonnées, données brutes de géoréférencement ;
+- georef : interprétation du géoréférencement (IfcMapConversion, IfcSite projeté ou latitude/longitude, manuel) ;
+- geometrie : modèle 3D GLB et emprise au sol en une lecture ;
+- proprietes : Psets génériques et index SQLite des objets (consultation sans rouvrir la maquette).
+Prévu au lot 4 : locaux (IfcSpace) et « Données d'identification ».
 """
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-VERSION_MODULE = "0.1.0"
+VERSION_MODULE = "0.2.0"
 
 
 def version_ifcopenshell() -> str | None:

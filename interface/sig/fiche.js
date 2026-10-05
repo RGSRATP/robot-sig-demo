@@ -1,16 +1,32 @@
-// Panneau « fiche » d'un objet SIG : attributs et coordonnées (système d'origine et Lambert 93).
+// Volet « Propriétés » : fiche d'un objet SIG (attributs, coordonnées d'origine et Lambert 93),
+// d'une maquette (positionnement) ou d'un objet de maquette (Psets IFC).
 import { dateCourte } from './api.js';
-let panneau = null;
+import { bouton, el } from './ui.js';
 
-export function monterFiche(racine) {
-  panneau = document.createElement('aside');
-  panneau.className = 'sig-fiche';
-  panneau.hidden = true;
-  racine.appendChild(panneau);
+let panneau = null;
+let ouvrirVolet = () => {};
+let fermerVolet = () => {};
+let surFermeture = null;
+
+export function monterFiche(conteneur, { ouvrir, fermer }) {
+  panneau = conteneur;
+  ouvrirVolet = ouvrir;
+  fermerVolet = fermer;
+  vider();
+}
+
+function vider() {
+  panneau.replaceChildren(el('div', { className: 'sig-vide' },
+    el('p', { textContent: 'Cliquez sur un objet de la carte ou d\'une maquette pour afficher ses propriétés.' })));
 }
 
 export function fermerFiche() {
-  if (panneau) panneau.hidden = true;
+  if (!panneau) return;
+  vider();
+  fermerVolet();
+  const f = surFermeture;
+  surFermeture = null;
+  f?.();
 }
 
 function nombre(v) {
@@ -20,56 +36,142 @@ function nombre(v) {
 function coordonnees(c) {
   if (c.point) return `X ${nombre(c.point[0])} · Y ${nombre(c.point[1])}`;
   const [x1, y1, x2, y2] = c.emprise;
-  return `emprise X ${nombre(x1)} → ${nombre(x2)} · Y ${nombre(y1)} → ${nombre(y2)}`;
+  return `X ${nombre(x1)} → ${nombre(x2)} · Y ${nombre(y1)} → ${nombre(y2)}`;
 }
 
-export function afficherFiche(fiche, couche, surFermeture) {
-  if (!panneau) return;
-  const fermer = document.createElement('button');
-  Object.assign(fermer, { type: 'button', className: 'sig-btn sig-fiche__fermer', textContent: '×', title: 'Fermer' });
-  fermer.addEventListener('click', () => { fermerFiche(); surFermeture?.(); });
-
-  const titre = document.createElement('h2');
-  const sous = document.createElement('p');
-  sous.className = 'sig-info';
-  sous.textContent = couche.service
-    ? `${couche.libelle} — service Esri, données du ${dateCourte(couche.service.date_maj)}`
-    : couche.libelle;
-  panneau.replaceChildren(fermer, titre, sous);
-
-  if (fiche.erreur) {
-    titre.textContent = 'Objet indisponible';
-    const p = document.createElement('p');
-    p.className = 'sig-erreur';
-    p.textContent = fiche.erreur;
-    panneau.append(p);
-    panneau.hidden = false;
-    return;
+function liste(paires) {
+  const dl = el('dl', { className: 'sig-dl' });
+  for (const [k, v] of paires) {
+    if (v == null || v === '') continue;
+    dl.append(el('dt', { textContent: k }), el('dd', { textContent: v }));
   }
-  titre.textContent = fiche.libelle ?? `Objet n° ${fiche.n}`;
+  return dl;
+}
 
-  const coords = document.createElement('dl');
-  coords.className = 'sig-coords';
-  const { origine, lambert93 } = fiche.coordonnees;
-  const ajouter = (dt, dd) => {
-    coords.append(Object.assign(document.createElement('dt'), { textContent: dt }),
-                  Object.assign(document.createElement('dd'), { textContent: dd }));
-  };
-  ajouter(`Lambert 93 (${lambert93.systeme})`, coordonnees(lambert93));
-  if (origine.systeme !== lambert93.systeme) ajouter(`Origine (${origine.systeme})`, coordonnees(origine));
-  ajouter('Géométrie', fiche.type_geometrie);
-
-  const table = document.createElement('table');
-  table.className = 'sig-attributs';
-  for (const [k, v] of Object.entries(fiche.attributs)) {
+function tableau(valeurs) {
+  const table = el('table', { className: 'sig-attributs' });
+  for (const [k, v] of Object.entries(valeurs)) {
     const tr = table.insertRow();
     tr.insertCell().textContent = k;
-    tr.insertCell().textContent = v ?? '';
+    tr.insertCell().textContent = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
   }
-  const h3 = Object.assign(document.createElement('h3'), { textContent: `Attributs (${Object.keys(fiche.attributs).length})` });
-  const enveloppe = document.createElement('div');
-  enveloppe.className = 'sig-attributs__defilement';
-  enveloppe.append(table);
-  panneau.append(coords, h3, enveloppe);
-  panneau.hidden = false;
+  return table;
+}
+
+function entete(titre, sousTitre, nature) {
+  return el('header', { className: 'sig-fiche__tete' },
+    nature ? el('span', { className: 'sig-fiche__nature', textContent: nature }) : null,
+    el('h3', { className: 'sig-fiche__titre', textContent: titre }),
+    sousTitre ? el('p', { className: 'sig-info', textContent: sousTitre }) : null);
+}
+
+// La sélection précédente est effacée par carte.js (répartition des clics), pas ici.
+function montrer(noeuds, fermeture) {
+  surFermeture = fermeture || null;
+  panneau.replaceChildren(...noeuds.filter(Boolean));
+  panneau.scrollTop = 0;
+  ouvrirVolet();
+}
+
+// ---------------------------------------------------------------- objet SIG
+
+export function afficherFiche(fiche, couche, fermeture) {
+  if (!panneau) return;
+  const source = couche.service
+    ? `${couche.libelle} — service Esri, données du ${dateCourte(couche.service.date_maj)}`
+    : couche.libelle;
+  if (fiche.erreur) {
+    montrer([entete('Objet indisponible', source, 'Objet SIG'), el('p', { className: 'sig-erreur', textContent: fiche.erreur })], fermeture);
+    return;
+  }
+  const { origine, lambert93 } = fiche.coordonnees;
+  const coords = [[`Lambert 93`, coordonnees(lambert93)]];
+  if (origine.systeme !== lambert93.systeme) coords.push([`Origine (${origine.systeme})`, coordonnees(origine)]);
+  coords.push(['Géométrie', fiche.type_geometrie]);
+  montrer([
+    entete(fiche.libelle ?? `Objet n° ${fiche.n}`, source, 'Objet SIG'),
+    liste(coords),
+    el('h4', { textContent: `Attributs (${Object.keys(fiche.attributs).length})` }),
+    tableau(fiche.attributs),
+  ], fermeture);
+}
+
+// ---------------------------------------------------------------- maquette
+
+const PHASES = { pret: 'traitée', en_cours: 'traitement en cours', en_attente: 'en attente de traitement', erreur: 'erreur de traitement' };
+
+export function afficherMaquette(m, actions, fermeture) {
+  if (!panneau) return;
+  const pos = m.positionnement;
+  const meta = m.metadonnees || {};
+  const noeuds = [entete(m.nom, m.dossier, 'Maquette IFC')];
+  const outils = el('div', { className: 'sig-fiche__actions' });
+  if (pos?.statut === 'positionnee') {
+    const b3d = el('button', { type: 'button', className: 'sig-bouton sig-bouton--principal',
+      textContent: actions.chargee ? 'Masquer la 3D' : `Afficher en 3D (${pos.affichage.taille_mo} Mo)` });
+    b3d.addEventListener('click', actions.basculer3d);
+    outils.append(b3d, bouton('zoom', 'Zoomer sur la maquette', actions.zoomer),
+      bouton('oeil', actions.isolee ? 'Ne plus isoler' : 'Isoler (atténuer les autres maquettes)', actions.isoler));
+  }
+  outils.append(bouton('actualiser', 'Relancer le traitement', actions.recalculer));
+  noeuds.push(outils);
+
+  if (pos) {
+    const etat = pos.statut === 'positionnee'
+      ? el('p', { className: `sig-etiquette sig-etiquette--${pos.precision === 'approchée' ? 'alerte' : 'ok'}`, textContent: pos.libelle })
+      : el('p', { className: 'sig-etiquette sig-etiquette--erreur', textContent: 'Non positionnée' });
+    noeuds.push(el('h4', { textContent: 'Positionnement' }), etat);
+    if (pos.raison) noeuds.push(el('p', { className: 'sig-erreur', textContent: pos.raison }));
+    noeuds.push(liste([
+      ['Système', pos.systeme ? `${pos.systeme}${pos.systeme_source ? ` (${pos.systeme_source})` : ''}` : null],
+      ['Centre (Lambert 93)', pos.centre_l93 ? `X ${nombre(pos.centre_l93[0])} · Y ${nombre(pos.centre_l93[1])}` : null],
+      ['Rotation', pos.repere ? `${nombre(Math.round(pos.repere.rotation_deg * 1000) / 1000)}°` : null],
+      ['Terrain (RGE ALTI)', pos.altitude_terrain != null ? `${nombre(pos.altitude_terrain)} m NGF` : null],
+      ['Hauteurs / terrain', pos.hauteurs_affichees ? `${nombre(pos.hauteurs_affichees[0])} m → ${nombre(pos.hauteurs_affichees[1])} m` : null],
+      ['Calage vertical', pos.calage_vertical],
+    ]));
+    if (pos.avertissements?.length) {
+      noeuds.push(el('ul', { className: 'sig-avertissements' }, ...pos.avertissements.map((t) => el('li', { textContent: t }))));
+    }
+  } else {
+    const e = m.etat;
+    noeuds.push(el('p', { className: e.phase === 'erreur' ? 'sig-erreur' : 'sig-info',
+      textContent: e.phase === 'erreur' ? e.message : `${PHASES[e.phase]}${e.progression != null ? ` (${e.progression} %)` : ''}` }));
+  }
+  noeuds.push(el('h4', { textContent: 'Fichier' }), liste([
+    ['Fichier', m.fichier],
+    ['Taille', `${nombre(m.taille_mo)} Mo`],
+    ['Schéma', meta.schema],
+    ['Projet', meta.projet],
+    ['Application', meta.application],
+    ['Date', meta.date ? dateCourte(meta.date) : null],
+    ['Unité', meta.unite_longueur],
+    ['Objets 3D', m.nb_objets != null ? nombre(m.nb_objets) : null],
+    ['Locaux (IfcSpace)', meta.nb_locaux != null ? nombre(meta.nb_locaux) : null],
+    ['Traitement', m.duree_traitement_s != null ? `${nombre(m.duree_traitement_s)} s` : null],
+  ]));
+  montrer(noeuds, fermeture);
+}
+
+// ---------------------------------------------------------------- objet de maquette
+
+export function afficherObjetIfc(fiche, maquette, fermeture) {
+  if (!panneau) return;
+  if (fiche.erreur) {
+    montrer([entete('Objet indisponible', maquette?.nom, 'Objet IFC'), el('p', { className: 'sig-erreur', textContent: fiche.erreur })], fermeture);
+    return;
+  }
+  const noeuds = [
+    entete(fiche.nom || fiche.type_ifc, maquette?.nom, fiche.type_ifc),
+    liste([['Type', fiche.type_objet], ['Étage', fiche.etage], ['Description', fiche.description], ['GlobalId', fiche.guid]]),
+  ];
+  const psets = Object.entries(fiche.psets || {}).sort(([a], [b]) => a.localeCompare(b, 'fr'));
+  noeuds.push(el('h4', { textContent: `Jeux de propriétés (${psets.length})` }));
+  for (const [nom, valeurs] of psets) {
+    const d = el('details', { className: 'sig-pset', open: psets.length <= 3 || /identification|SGP_/i.test(nom) },
+      el('summary', { textContent: `${nom} (${Object.keys(valeurs).length})` }), tableau(valeurs));
+    noeuds.push(d);
+  }
+  if (fiche.anomalie) noeuds.push(el('p', { className: 'sig-alerte', textContent: fiche.anomalie }));
+  montrer(noeuds, fermeture);
 }

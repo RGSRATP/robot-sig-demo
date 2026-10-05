@@ -84,6 +84,16 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         if "style" in d and not isinstance(d["style"], dict):
             raise erreur(f"« couches_fichiers » n° {i} ({d['fichier']}) : « style » doit être un dictionnaire")
 
+    reseau = cfg.get("reseau")
+    if not isinstance(reseau, dict):
+        raise erreur("section « reseau » absente (proxy, certificats, délai des appels du serveur)")
+    if reseau.get("proxy") is not None and not isinstance(reseau["proxy"], str):
+        raise erreur("« reseau.proxy » doit être une URL (ou null pour une connexion directe)")
+    if reseau.get("certificats") is not None and not isinstance(reseau["certificats"], str):
+        raise erreur("« reseau.certificats » doit être un chemin de fichier .pem (ou null)")
+    if not _nombre(reseau.get("delai_secondes"), True):
+        raise erreur("« reseau.delai_secondes » doit être un nombre strictement positif")
+
     services = cfg.get("services_esri")
     if services is None:
         cfg["services_esri"] = services = []
@@ -107,14 +117,9 @@ def _controler_esri(cfg: dict, services: list, erreur) -> None:
     for cle in ("dossier_cache", "dossier_exports"):
         if not isinstance(esri.get(cle), str) or not esri[cle]:
             raise erreur(f"« esri.{cle} » absent")
-    for cle, strict in (("delai_secondes", True), ("max_objets", True), ("cache_heures_defaut", False),
-                        ("nouvel_essai_minutes", False)):
+    for cle, strict in (("max_objets", True), ("cache_heures_defaut", False), ("nouvel_essai_minutes", False)):
         if not _nombre(esri.get(cle), strict):
             raise erreur(f"« esri.{cle} » doit être un nombre {'strictement ' if strict else ''}positif")
-    if esri.get("proxy") is not None and not isinstance(esri["proxy"], str):
-        raise erreur("« esri.proxy » doit être une URL (ou null pour une connexion directe)")
-    if esri.get("certificats") is not None and not isinstance(esri["certificats"], str):
-        raise erreur("« esri.certificats » doit être un chemin de fichier .pem (ou null)")
 
     vus = {}
     for i, s in enumerate(services, 1):
