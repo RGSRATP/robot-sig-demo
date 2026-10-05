@@ -65,6 +65,7 @@ Géoplateforme IGN, appelée par le navigateur à travers le proxy du poste :
 - La méthode utilisée est affichée pour chaque maquette ; une maquette sans géoréférencement ni saisie manuelle est listée « non positionnée ».
 - Emprise au sol de chaque maquette affichée comme une couche ; liste des maquettes avec zoom.
 - Clic sur une emprise : fiche (nom, schéma IFC, méthode de positionnement) et bouton d'ouverture en 3D dans un panneau.
+- *(Évolution validée le 2026-10-05, voir `DECISIONS.md`)* : la 3D est affichée **dans la carte**, au milieu des couches SIG (même écran, même caméra), et non dans un panneau séparé ; clic sur un objet de maquette : fiche IFC (type, étage, Psets).
 
 **Recette** : les deux maquettes de test sont positionnées et s'ouvrent en 3D ; une maquette sans géoréférencement apparaît « non positionnée » ; tests sur chaque méthode.
 

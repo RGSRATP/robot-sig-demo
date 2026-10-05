@@ -325,16 +325,16 @@ export class GestionnaireMaquettes {
     const ligne = (m, texte) => {
       const b = el('button', { type: 'button', className: 'sig-lien', textContent: m.nom, title: m.fichier });
       b.addEventListener('click', () => this.ouvrirFiche(m.id, true));
-      return el('li', {}, b, ` : ${texte}`);
+      return el('li', { className: 'sig-anomalie' }, b, el('span', { textContent: texte }));
     };
     this.panneauAnomalies.replaceChildren(el('section', { className: 'sig-section' },
       el('h3', { textContent: `Maquettes non positionnées (${nonPos.length})` }),
-      nonPos.length ? el('ul', { className: 'sig-anomalies' }, ...nonPos.map((m) => ligne(m, m.positionnement.raison)))
+      nonPos.length ? el('ul', { className: 'sig-anomalies sig-anomalies--maquettes' }, ...nonPos.map((m) => ligne(m, m.positionnement.raison)))
         : el('p', { className: 'sig-info', textContent: 'Aucune.' }),
       erreurs.length ? el('h3', { textContent: `Maquettes en erreur de traitement (${erreurs.length})` }) : null,
-      erreurs.length ? el('ul', { className: 'sig-anomalies' }, ...erreurs.map((m) => ligne(m, m.etat.message))) : null,
+      erreurs.length ? el('ul', { className: 'sig-anomalies sig-anomalies--maquettes' }, ...erreurs.map((m) => ligne(m, m.etat.message))) : null,
       avert.length ? el('h3', { textContent: 'Avertissements de positionnement' }) : null,
-      avert.length ? el('ul', { className: 'sig-anomalies' },
+      avert.length ? el('ul', { className: 'sig-anomalies sig-anomalies--maquettes' },
         ...avert.flatMap((m) => m.positionnement.avertissements.map((t) => ligne(m, t)))) : null,
     ));
     this.nbAnomalies = nonPos.length + erreurs.length;
