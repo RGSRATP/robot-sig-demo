@@ -1,0 +1,21 @@
+{
+  "name": "demonstrateur-sig-interface",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Interface du démonstrateur SIG : carte MapLibre sur fond IGN (code métier dans sig/)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "maplibre-gl": "6.12.0"
+  },
+  "devDependencies": {
+    "vite": "6.4.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
