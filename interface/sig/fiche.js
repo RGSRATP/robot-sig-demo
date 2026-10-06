@@ -165,11 +165,27 @@ export function afficherMaquette(m, actions, fermeture) {
     ['Application', meta.application],
     ['Date', meta.date ? dateCourte(meta.date) : null],
     ['Unité', meta.unite_longueur],
-    ['Objets 3D', m.nb_objets != null ? nombre(m.nb_objets) : null],
+    ['Objets 3D', objets3d(m)],
+    ['Modèle 3D', m.positionnement?.affichage ? tailleModele(m.positionnement.affichage) : null],
     ['Locaux (IfcSpace)', meta.nb_locaux != null ? nombre(meta.nb_locaux) : null],
     ['Traitement', m.duree_traitement_s != null ? `${nombre(m.duree_traitement_s)} s` : null],
   ]));
   montrer(noeuds, fermeture);
+}
+
+function objets3d(m) {
+  if (m.nb_objets == null) return null;
+  const manquants = Object.entries(m.non_convertis || {});
+  if (!manquants.length) return nombre(m.nb_objets);
+  const detail = manquants.map(([type, n]) => `${nombre(n)} ${type}`).join(', ');
+  return `${nombre(m.nb_objets)} — non convertis : ${detail}`;
+}
+
+function tailleModele(a) {
+  const mtri = (n) => `${nombre(Math.round(n / 1e5) / 10)} M triangles`;
+  return a.detail
+    ? `${nombre(a.taille_mo)} Mo (${mtri(a.triangles)}) + ${nombre(a.taille_detail_mo)} Mo de petits éléments (${mtri(a.triangles_detail)})`
+    : `${nombre(a.taille_mo)} Mo (${mtri(a.triangles)})`;
 }
 
 // ---------------------------------------------------------------- objet de maquette

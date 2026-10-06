@@ -5,7 +5,7 @@ Ne dépend ni de serveur/, ni d'interface/, ni de config/ : entrées explicites,
 Contenu :
 - lecture : ouverture contrôlée, métadonnées, données brutes de géoréférencement ;
 - georef : interprétation du géoréférencement (IfcMapConversion, IfcSite projeté ou latitude/longitude, manuel) ;
-- geometrie : modèle 3D GLB et emprise au sol en une lecture ;
+- geometrie : modèles 3D allégés (GLB) et emprise au sol, convertis par web-ifc (convertisseur/, Node) ;
 - proprietes : Psets génériques et index SQLite des objets (consultation sans rouvrir la maquette) ;
 - locaux : IfcSpace (codes « Données d'identification » SGP_DI_*, niveau, emprise au sol, altitudes).
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-VERSION_MODULE = "0.2.0"
+VERSION_MODULE = "0.3.2"
 VERSION_LOCAUX = "1"   # version de l'extraction des locaux (cache séparé de la 3D)
 
 

@@ -21,10 +21,12 @@ from functools import lru_cache
 from pathlib import Path
 
 import httpx
+import numpy as np
 import yaml
 from pyproj import Transformer
 
 from commun.ifc import VERSION_LOCAUX, VERSION_MODULE, georef
+from commun.ifc.geometrie import arreter_processus
 
 from . import reseau
 from .config import RACINE
@@ -68,13 +70,18 @@ def charger_config(chemin: Path = CHEMIN_GEOREF) -> dict:
         if not isinstance(cfg.get(cle), str) or not cfg[cle]:
             raise erreur(f"« {cle} » absent")
     t = cfg.get("traitement") or {}
-    if not _nombre(t.get("deflexion_lineaire_m"), True) or not _nombre(t.get("simplification_emprise_m")) \
-            or not _nombre(t.get("delai_max_minutes"), True) or not isinstance(t.get("exclure"), list):
-        raise erreur("section « traitement » incomplète (deflexion_lineaire_m, exclure, simplification_emprise_m, "
-                     "delai_max_minutes)")
+    if not _nombre(t.get("petits_elements_m")) or not _nombre(t.get("simplification_emprise_m")) \
+            or not _nombre(t.get("simplification_emprise_affichage_m")) or not _nombre(t.get("simplification_3d_m")) \
+            or not _nombre(t.get("delai_max_minutes"), True) or not isinstance(t.get("exclure"), list) \
+            or not (isinstance(t.get("traitements_simultanes"), int) and t["traitements_simultanes"] >= 1):
+        raise erreur("section « traitement » incomplète (exclure, petits_elements_m, simplification_emprise_m, "
+                     "simplification_emprise_affichage_m, simplification_3d_m, "
+                     "delai_max_minutes, traitements_simultanes)")
     a3d = cfg.get("affichage_3d") or {}
-    if not _nombre(a3d.get("chargement_automatique_max_mo")) or not _nombre(a3d.get("zoom_chargement_automatique")):
-        raise erreur("« affichage_3d » : chargement_automatique_max_mo et zoom_chargement_automatique (nombres positifs) attendus")
+    if not all(_nombre(a3d.get(k)) for k in ("chargement_automatique_max_mo", "zoom_chargement_automatique", "zoom_details",
+                                               "budget_triangles_millions")):
+        raise erreur("« affichage_3d » : chargement_automatique_max_mo, zoom_chargement_automatique, zoom_details et "
+                     "budget_triangles_millions (nombres positifs) attendus")
     ident = cfg.get("identification") or {}
     if not isinstance(ident.get("systemes_candidats"), list) or not _nombre(ident.get("tolerance_m"), True):
         raise erreur("section « identification » incomplète (systemes_candidats, tolerance_m)")
@@ -133,12 +140,23 @@ def fichiers(cfgm: dict) -> list[tuple[str, str, Path]]:
 def cle_traitement(chemin: Path, cfgm: dict) -> str:
     st = chemin.stat()
     t = cfgm["traitement"]
-    return (f"{st.st_size}-{st.st_mtime_ns}-{VERSION_MODULE}-{t['deflexion_lineaire_m']}-"
-            f"{t['simplification_emprise_m']}-{','.join(sorted(t['exclure']))}")
+    return (f"{st.st_size}-{st.st_mtime_ns}-{VERSION_MODULE}-{t['petits_elements_m']}-{t['simplification_3d_m']}-"
+            f"{t['simplification_emprise_m']}-{t['simplification_emprise_affichage_m']}-{','.join(sorted(t['exclure']))}")
 
 
 def cle_locaux(chemin: Path, cfgm: dict) -> str:
     return f"{cle_traitement(chemin, cfgm)}-locaux{VERSION_LOCAUX}"
+
+
+def parametres_traitement(chemin: Path, cfgm: dict, tache: str = "complet") -> dict:
+    """Paramètres transmis au travailleur (serveur/sig/travail_ifc.py)."""
+    t = cfgm["traitement"]
+    return {"cle": cle_traitement(chemin, cfgm), "cle_locaux": cle_locaux(chemin, cfgm), "tache": tache,
+            "exclure": t["exclure"], "petits_elements_m": t["petits_elements_m"],
+            "simplification_3d_m": t["simplification_3d_m"],
+            "simplification_emprise_m": t["simplification_emprise_m"],
+            "simplification_emprise_affichage_m": t["simplification_emprise_affichage_m"],
+            "delai_max_minutes": t["delai_max_minutes"]}
 
 
 def dossier_cache(cfgm: dict, id_: str) -> Path:
@@ -146,8 +164,18 @@ def dossier_cache(cfgm: dict, id_: str) -> Path:
 
 
 def _lire_json(p: Path) -> dict | None:
+    """Contenu d'un fichier JSON du cache, relu seulement s'il a changé. Ne pas modifier l'objet renvoyé."""
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        st = p.stat()
+    except OSError:
+        return None
+    return _json_fichier(str(p), st.st_mtime_ns, st.st_size)
+
+
+@lru_cache(maxsize=1024)
+def _json_fichier(chemin: str, _mtime: int, _taille: int) -> dict | None:
+    try:
+        return json.loads(Path(chemin).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
@@ -234,20 +262,23 @@ def verrou_tiers(dossier: Path) -> bool:
 # ---------------------------------------------------------------- file d'attente des traitements
 
 class Traitements:
-    """Un traitement à la fois (mémoire), dans un processus séparé ; les plus petites maquettes d'abord."""
+    """File des traitements, chacun dans un processus séparé ; « traitements_simultanes » à la fois.
+
+    Locaux seuls d'abord (rapides), puis les maquettes les plus petites.
+    """
 
     def __init__(self):
         self._verrou = threading.Lock()
-        self._attente: dict[str, tuple[int, Path, str, dict, str]] = {}   # id -> (taille, chemin, clé, config, tâche)
-        self._courant: str | None = None
-        self._processus: subprocess.Popen | None = None
-        self._fil: threading.Thread | None = None
+        self._attente: dict[str, tuple[int, Path, dict, str]] = {}   # id -> (taille, chemin, config, tâche)
+        self._courants: set[str] = set()
+        self._processus: dict[str, subprocess.Popen] = {}
+        self._fils: list[threading.Thread] = []
         self.historique: list[tuple] = []   # (id, tâche, code de sortie ou « verrou »), pour le diagnostic
 
     def assurer(self, cfgm: dict, maquettes: list[tuple[str, str, Path]]) -> None:
         with self._verrou:
             for id_, _rel, chemin in maquettes:
-                if id_ == self._courant:
+                if id_ in self._courants:
                     continue
                 cle = cle_traitement(chemin, cfgm)
                 if erreur(cfgm, id_, cle):
@@ -259,11 +290,13 @@ class Traitements:
                     if locaux(cfgm, id_, cl) or erreur_locaux(cfgm, id_, cl):
                         continue
                     tache = "locaux"   # maquette déjà traitée : locaux seuls, sans refaire la 3D
-                self._attente[id_] = (chemin.stat().st_size, chemin, cle, cfgm, tache)
-            # le fil se désinscrit lui-même sous le verrou quand la file est vide (pas de course à l'arrêt)
-            if self._attente and self._fil is None:
-                self._fil = threading.Thread(target=self._boucle, name="traitements-ifc", daemon=True)
-                self._fil.start()
+                self._attente[id_] = (chemin.stat().st_size, chemin, cfgm, tache)
+            # chaque fil se désinscrit lui-même sous le verrou quand la file est vide (pas de course à l'arrêt)
+            simultanes = int(cfgm["traitement"]["traitements_simultanes"])
+            while self._attente and len(self._fils) < simultanes:
+                fil = threading.Thread(target=self._boucle, name="traitements-ifc", daemon=True)
+                self._fils.append(fil)
+                fil.start()
 
     def relancer(self, cfgm: dict, id_: str, chemin: Path) -> None:
         d = dossier_cache(cfgm, id_)
@@ -271,72 +304,84 @@ class Traitements:
             (d / nom).unlink(missing_ok=True)
         self.assurer(cfgm, [(id_, "", chemin)])
 
+    def _ordre(self) -> list[str]:
+        return sorted(self._attente, key=lambda k: (self._attente[k][3] != "locaux", self._attente[k][0]))
+
     def position(self, id_: str) -> int | None:
         with self._verrou:
-            ordre = sorted(self._attente, key=lambda k: self._attente[k][0])
+            ordre = self._ordre()
         return ordre.index(id_) + 1 if id_ in ordre else None
 
-    def en_cours(self) -> str | None:
-        return self._courant
+    def en_cours(self) -> list[str]:
+        with self._verrou:
+            return sorted(self._courants)
 
     def nb_attente(self) -> int:
         with self._verrou:
             return len(self._attente)
 
+    def occupee(self) -> bool:
+        """Traitement en cours ou en attente (lu en une fois : une maquette peut passer de l'un à l'autre)."""
+        with self._verrou:
+            return bool(self._attente or self._courants)
+
     def _boucle(self) -> None:
         while True:
             with self._verrou:
                 if not self._attente:
-                    self._courant = None
-                    self._fil = None
+                    self._fils.remove(threading.current_thread())
                     return
-                # locaux seuls d'abord (rapides), puis les traitements complets des plus petites maquettes
-                id_ = min(self._attente, key=lambda k: (self._attente[k][4] != "locaux", self._attente[k][0]))
-                _taille, chemin, cle, cfgm, tache = self._attente.pop(id_)
-                self._courant = id_
-            self._executer(id_, chemin, cle, cfgm, tache)
+                id_ = self._ordre()[0]
+                _taille, chemin, cfgm, tache = self._attente.pop(id_)
+                self._courants.add(id_)
+            try:
+                self._executer(id_, chemin, cfgm, tache)
+            except Exception as e:   # un incident sur une maquette ne doit pas arrêter la file
+                self.historique.append((id_, tache, f"{type(e).__name__} : {e}"))
+            finally:
+                with self._verrou:
+                    self._courants.discard(id_)
 
-    def _executer(self, id_: str, chemin: Path, cle: str, cfgm: dict, tache: str = "complet") -> None:
+    def _executer(self, id_: str, chemin: Path, cfgm: dict, tache: str = "complet") -> None:
         sortie = dossier_cache(cfgm, id_)
         if not prendre_verrou(sortie):
             self.historique.append((id_, tache, "verrou"))
             return   # traitée par un autre serveur : reprise au prochain inventaire si nécessaire
         try:
-            self._executer_verrouille(id_, chemin, cle, cfgm, tache, sortie)
+            self._executer_verrouille(id_, chemin, cfgm, tache, sortie)
         finally:
             rendre_verrou(sortie)
 
-    def _executer_verrouille(self, id_, chemin, cle, cfgm, tache, sortie) -> None:
+    def _executer_verrouille(self, id_, chemin, cfgm, tache, sortie) -> None:
         a_effacer = (("erreur_locaux.json",) if tache == "locaux"
                      else ("resultat.json", "erreur.json", "trace.txt", "erreur_locaux.json"))
         for nom in a_effacer:
             (sortie / nom).unlink(missing_ok=True)
-        t = cfgm["traitement"]
         params = sortie / "parametres.json"
-        params.write_text(json.dumps({"cle": cle, "cle_locaux": cle_locaux(chemin, cfgm), "tache": tache,
-                                      "exclure": t["exclure"],
-                                      "deflexion_lineaire_m": t["deflexion_lineaire_m"],
-                                      "simplification_emprise_m": t["simplification_emprise_m"]}), encoding="utf-8")
+        params.write_text(json.dumps(parametres_traitement(chemin, cfgm, tache)), encoding="utf-8")
         commande = [sys.executable, "-m", "serveur.sig.travail_ifc", str(chemin), str(sortie), str(params)]
+        delai = float(cfgm["traitement"]["delai_max_minutes"]) * 60
         journal = (sortie / "journal.txt").open("w", encoding="utf-8", errors="replace")
         try:
-            self._processus = subprocess.Popen(commande, cwd=RACINE, stdout=journal, stderr=subprocess.STDOUT,
-                                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            p = subprocess.Popen(commande, cwd=RACINE, stdout=journal, stderr=subprocess.STDOUT,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            self._processus[id_] = p
             try:
-                code = self._processus.wait(timeout=float(t["delai_max_minutes"]) * 60)
+                # le travailleur applique lui-même le délai à la conversion 3D ; marge pour sa propre lecture
+                code = p.wait(timeout=delai + 120)
             except subprocess.TimeoutExpired:
-                self._processus.kill()
-                self._processus.wait()
+                arreter_processus(p)
                 code = None
-                message = f"traitement interrompu après {t['delai_max_minutes']} minutes (délai « delai_max_minutes »)"
+                message = (f"traitement interrompu après {cfgm['traitement']['delai_max_minutes']} minutes "
+                           "(délai « delai_max_minutes »)")
         except OSError as e:
             code, message = None, f"lancement du traitement impossible ({e})"
         finally:
             journal.close()
-            self._processus = None
+            self._processus.pop(id_, None)
         self.historique.append((id_, tache, code))
         fichier_erreur, cle_erreur = (("erreur_locaux.json", cle_locaux(chemin, cfgm)) if tache == "locaux"
-                                      else ("erreur.json", cle))
+                                      else ("erreur.json", cle_traitement(chemin, cfgm)))
         if code != 0 and not (sortie / fichier_erreur).is_file():
             if code is not None:
                 message = f"le traitement s'est arrêté brutalement (code {code}) : mémoire insuffisante ?"
@@ -347,8 +392,8 @@ class Traitements:
     def arreter(self) -> None:
         with self._verrou:
             self._attente.clear()
-        if self._processus is not None:
-            self._processus.kill()
+        for p in list(self._processus.values()):
+            arreter_processus(p)
 
 
 traitements = Traitements()
@@ -408,13 +453,17 @@ def _saisie(cfgm: dict, rel: str) -> dict | None:
 
 
 def _geojson_vers_wgs84(geom: dict, repere: dict, vers_wgs84: Transformer) -> dict:
+    cos, sin = math.cos(math.radians(repere["rotation_deg"])), math.sin(math.radians(repere["rotation_deg"]))
+    ech = repere["echelle"]
+    ox, oy, _ = repere["origine"]
+
     def anneau(coords):
-        sortie = []
-        for x, y, *_ in coords:
-            px, py, _ = georef.vers_projete(repere, x, y)
-            lon, lat = vers_wgs84.transform(px, py)
-            sortie.append([round(lon, 8), round(lat, 8)])
-        return sortie
+        # même calcul que georef.vers_projete, sur tout l'anneau à la fois
+        xy = np.asarray(coords, dtype=float)[:, :2]
+        px = ox + ech * (cos * xy[:, 0] - sin * xy[:, 1])
+        py = oy + ech * (sin * xy[:, 0] + cos * xy[:, 1])
+        lon, lat = vers_wgs84.transform(px, py)
+        return np.round(np.column_stack([lon, lat]), 8).tolist()
 
     if geom["type"] == "Polygon":
         return {"type": "Polygon", "coordinates": [anneau(a) for a in geom["coordinates"]]}
@@ -465,9 +514,11 @@ def positionner(cfg: dict, cfgm: dict, id_: str, rel: str, res: dict, donnees_lo
         pos["locaux_seuls"] = True
 
     repere = pos["repere"]
-    vers_wgs84 = Transformer.from_crs(pos["systeme"], 4326, always_xy=True)
-    vers_l93 = Transformer.from_crs(pos["systeme"], 2154, always_xy=True)
+    vers_wgs84 = georef.transformateur(pos["systeme"], 4326)
+    vers_l93 = georef.transformateur(pos["systeme"], 2154)
     emprise_wgs84 = _geojson_vers_wgs84(geo["emprise_locale"], repere, vers_wgs84)
+    emprise_affichage = (_geojson_vers_wgs84(geo["emprise_affichage_locale"], repere, vers_wgs84)
+                         if geo.get("emprise_affichage_locale") else emprise_wgs84)
     bbox = _emprise(emprise_wgs84)
     if not all(math.isfinite(v) for v in bbox):
         pos.update(statut="non_positionnee", raison="conversion des coordonnées impossible")
@@ -508,10 +559,12 @@ def positionner(cfg: dict, cfgm: dict, id_: str, rel: str, res: dict, donnees_lo
         decalage_z += float(saisie["decalage_vertical_m"])
         calage += f", décalage manuel {float(saisie['decalage_vertical_m']):+.2f} m"
 
-    taille = (dossier_cache(cfgm, id_) / "modele.glb").stat().st_size if (dossier_cache(cfgm, id_) / "modele.glb").is_file() else 0
+    taille = geo.get("taille_glb") or 0
+    taille_detail = geo.get("taille_detail_glb") or 0
     pos.update({
         "emprise_wgs84": [round(v, 8) for v in bbox],
-        "emprise_geojson": emprise_wgs84,
+        "emprise_geojson": emprise_wgs84,          # exacte : interrogation croisée
+        "emprise_affichage": emprise_affichage,    # simplifiée : dessin sur la carte
         "centre_wgs84": centre,
         "centre_l93": centre_l93,
         "altitude_terrain": sol,
@@ -523,7 +576,13 @@ def positionner(cfg: dict, cfgm: dict, id_: str, rel: str, res: dict, donnees_lo
             "axe_y": lonlat(0, PAS_CONTROLE_M),
             "pas_m": PAS_CONTROLE_M,
             "decalage_z_m": round(decalage_z, 3),
+            # origine des modèles 3D dans le repère local ci-dessus (x, y, z ; z vertical)
+            "origine_modele": geo.get("origine_glb") or [0.0, 0.0, 0.0],
             "taille_mo": round(taille / 1e6, 1),
+            "taille_detail_mo": round(taille_detail / 1e6, 1),
+            "detail": taille_detail > 0,
+            "triangles": geo.get("triangles") or 0,
+            "triangles_detail": geo.get("triangles_detail") or 0,
             "chargement_automatique": taille / 1e6 <= cfgm["affichage_3d"]["chargement_automatique_max_mo"],
         },
     })
@@ -540,7 +599,7 @@ def etat_locaux(cfgm: dict, id_: str, chemin: Path) -> dict:
     e = erreur_locaux(cfgm, id_, cl)
     if e:
         return {"phase": "erreur", "message": e["message"]}
-    if traitements.en_cours() == id_:
+    if id_ in traitements.en_cours():
         return {"phase": "en_cours"}
     return {"phase": "en_attente"}
 
@@ -551,7 +610,7 @@ def etat_maquette(cfgm: dict, id_: str, cle: str) -> dict:
     e = erreur(cfgm, id_, cle)
     if e:
         return {"phase": "erreur", "message": e["message"]}
-    if traitements.en_cours() == id_ or verrou_tiers(dossier_cache(cfgm, id_)):
+    if id_ in traitements.en_cours() or verrou_tiers(dossier_cache(cfgm, id_)):
         en_cours = _lire_json(dossier_cache(cfgm, id_) / "etat.json") or {}
         return {"phase": "en_cours", "etape": en_cours.get("phase", "démarrage"),
                 "progression": en_cours.get("progression", 0), "message": en_cours.get("message", "démarrage"),
@@ -569,14 +628,36 @@ def decrire(cfg: dict, cfgm: dict, id_: str, rel: str, chemin: Path) -> dict:
         m["locaux"] = etat_locaux(cfgm, id_, chemin)
         m["metadonnees"] = res["metadonnees"]
         m["nb_objets"] = res["geometrie"]["nb_elements"]
+        m["nb_objets_attendus"] = res["geometrie"].get("nb_elements_attendus")
+        m["non_convertis"] = res["geometrie"].get("non_convertis") or {}
+        m["moteur_3d"] = res["geometrie"].get("moteur")
         m["duree_traitement_s"] = res.get("duree_secondes")
         try:
-            m["positionnement"] = positionner(cfg, cfgm, id_, rel, res, locaux(cfgm, id_, cle_locaux(chemin, cfgm)))
+            m["positionnement"] = _positionner_memo(cfg, cfgm, id_, rel, res, locaux(cfgm, id_, cle_locaux(chemin, cfgm)))
         except Exception as e:  # garde-fou : une maquette ne doit pas interrompre l'inventaire
             m["positionnement"] = {"statut": "non_positionnee", "methode": None, "libelle": "Non positionnée",
                                    "raison": f"erreur de positionnement ({type(e).__name__} : {e})",
                                    "avertissements": []}
     return m
+
+
+_MEMO_POSITIONNEMENT: dict[str, tuple] = {}   # id -> (clé, cfg, cfgm, positionnement)
+
+
+def _positionner_memo(cfg: dict, cfgm: dict, id_: str, rel: str, res: dict, donnees_locaux: dict | None) -> dict:
+    """positionner(), recalculé seulement si la maquette, ses locaux ou la configuration changent.
+
+    L'inventaire est redemandé régulièrement par l'interface : sans cela, chaque appel reconvertirait toutes les
+    emprises. Un positionnement sans altitude du terrain (service indisponible) n'est pas gardé : nouvel essai.
+    """
+    cle = (rel, res["cle"], donnees_locaux is not None)
+    memo = _MEMO_POSITIONNEMENT.get(id_)
+    if memo and memo[0] == cle and memo[1] is cfg and memo[2] is cfgm:
+        return dict(memo[3])
+    pos = positionner(cfg, cfgm, id_, rel, res, donnees_locaux)
+    if pos.get("statut") != "positionnee" or pos.get("altitude_terrain") is not None or not cfgm.get("altimetrie"):
+        _MEMO_POSITIONNEMENT[id_] = (cle, cfg, cfgm, pos)
+    return dict(pos)
 
 
 def une_maquette(cfg: dict, cfgm: dict, id_: str) -> dict | None:
@@ -600,8 +681,8 @@ def locaux_affichables(cfg: dict, cfgm: dict, m: dict) -> dict | None:
     dz = pos["affichage"]["decalage_z_m"] if positionnee else 0.0
     if positionnee:
         repere = pos["repere"]
-        vers_wgs84 = Transformer.from_crs(pos["systeme"], 4326, always_xy=True)
-        vers_l93 = Transformer.from_crs(pos["systeme"], 2154, always_xy=True)
+        vers_wgs84 = georef.transformateur(pos["systeme"], 4326)
+        vers_l93 = georef.transformateur(pos["systeme"], 2154)
     sortie = []
     for l in d["locaux"]:
         e = {k: v for k, v in l.items()}
@@ -629,7 +710,9 @@ def inventaire(cfg: dict, cfgm: dict) -> dict:
         "dossier": cfgm["dossier_ifc"],
         "zoom_chargement_automatique": cfgm["affichage_3d"]["zoom_chargement_automatique"],
         "maquettes": maquettes,
-        "traitement_en_cours": traitements.en_cours(),
+        "traitements_en_cours": traitements.en_cours(),
+        "zoom_details": cfgm["affichage_3d"]["zoom_details"],
+        "budget_triangles": cfgm["affichage_3d"]["budget_triangles_millions"] * 1e6,
         "en_attente": traitements.nb_attente(),
     }
 

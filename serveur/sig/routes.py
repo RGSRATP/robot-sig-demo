@@ -185,8 +185,14 @@ def _config_maquettes() -> dict:
 
 @routeur.get("/maquettes")
 def maquettes(cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
-    """Maquettes du dossier IFC : état du traitement, métadonnées, positionnement (méthode, emprise, calage)."""
-    return maq_sig.inventaire(cfg, cfgm)
+    """Maquettes du dossier IFC : état du traitement, métadonnées, positionnement (méthode, emprise, calage).
+
+    L'emprise exacte (interrogation croisée) n'est pas envoyée : l'emprise simplifiée suffit au dessin.
+    """
+    inv = maq_sig.inventaire(cfg, cfgm)
+    for m in inv["maquettes"]:
+        (m.get("positionnement") or {}).pop("emprise_geojson", None)
+    return inv
 
 
 @routeur.get("/maquettes/emprises")
@@ -207,7 +213,20 @@ def _maquette_traitee(id_maquette: str, cfgm: dict) -> tuple[str, dict]:
 @routeur.get("/maquettes/{id_maquette}/modele.glb")
 def maquette_modele(id_maquette: str, cfgm: dict = Depends(_config_maquettes)):
     _maquette_traitee(id_maquette, cfgm)
-    return FileResponse(maq_sig.dossier_cache(cfgm, id_maquette) / "modele.glb", media_type="model/gltf-binary")
+    return _glb(maq_sig.dossier_cache(cfgm, id_maquette) / "modele.glb")
+
+
+@routeur.get("/maquettes/{id_maquette}/detail.glb")
+def maquette_detail(id_maquette: str, cfgm: dict = Depends(_config_maquettes)):
+    """Petits éléments de la maquette (boulons, platines…), chargés en vue rapprochée."""
+    _maquette_traitee(id_maquette, cfgm)
+    return _glb(maq_sig.dossier_cache(cfgm, id_maquette) / "detail.glb")
+
+
+def _glb(chemin: Path) -> FileResponse:
+    if not chemin.is_file():
+        raise HTTPException(status_code=404, detail="aucun modèle 3D pour cette maquette")
+    return FileResponse(chemin, media_type="model/gltf-binary")
 
 
 @routeur.get("/maquettes/{id_maquette}/objets/{guid}")

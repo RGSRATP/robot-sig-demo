@@ -3,14 +3,20 @@ dossier_ifc: "tests/donnees/ifc"
 dossier_cache: "cache/ifc_test"      # remplacé par un dossier temporaire pendant les tests
 
 traitement:
-  deflexion_lineaire_m: 0.02
   exclure: ["IfcSpace", "IfcOpeningElement", "IfcAnnotation", "IfcGrid", "IfcVirtualElement"]
+  petits_elements_m: 0.30
+  simplification_3d_m: 0.005        # écart maximal toléré en simplifiant les surfaces (5 mm : invisible)
   simplification_emprise_m: 0.05
+  simplification_emprise_affichage_m: 0.5   # emprise dessinée sur la carte : morceaux proches fusionnés
   delai_max_minutes: 5
+  traitements_simultanes: 2
 
 affichage_3d:
   chargement_automatique_max_mo: 25
   zoom_chargement_automatique: 15      # les maquettes légères se chargent quand elles sont à l'écran à partir de ce zoom
+  zoom_details: 18
+  budget_triangles_millions: 6         # 3D chargée automatiquement (triangles, petits éléments compris) ;
+                                       # au-delà, à la demande. 6 M : fluide sur une carte graphique intégrée
 
 identification:
   systemes_candidats: ["EPSG:2154", "EPSG:3949"]

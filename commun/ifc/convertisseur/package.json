@@ -1,0 +1,14 @@
+{
+  "name": "convertisseur-ifc",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Conversion IFC → modèle 3D allégé (GLB) et empreintes au sol, avec web-ifc (module commun/ifc)",
+  "type": "module",
+  "dependencies": {
+    "meshoptimizer": "1.3.0",
+    "web-ifc": "0.0.77"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

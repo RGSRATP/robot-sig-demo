@@ -29,9 +29,7 @@ def cache_traite(tmp_path_factory):
     t = cfgm["traitement"]
     for id_, _rel, chemin in maq.fichiers(cfgm):
         sortie = maq.dossier_cache(cfgm, id_)
-        params = {"cle": maq.cle_traitement(chemin, cfgm), "cle_locaux": maq.cle_locaux(chemin, cfgm), "tache": "complet",
-                  "exclure": t["exclure"],
-                  "deflexion_lineaire_m": t["deflexion_lineaire_m"], "simplification_emprise_m": t["simplification_emprise_m"]}
+        params = maq.parametres_traitement(chemin, cfgm)
         p = sortie / "parametres.json"
         sortie.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(params), encoding="utf-8")
@@ -181,7 +179,7 @@ def test_file_de_traitement_sous_processus(cfgm, tmp_path):
     choix = [m for m in maq.fichiers(cfgm) if m[1] in ("methode1_map_conversion_ifc4.ifc", "piege_pas_un_ifc.ifc")]
     file.assurer(cfgm, choix)
     debut = time.time()
-    while (file.en_cours() or file.nb_attente()) and time.time() - debut < 120:
+    while file.occupee() and time.time() - debut < 120:
         time.sleep(0.2)
     ok, ko = choix if choix[0][1].startswith("methode") else choix[::-1]
 
@@ -197,7 +195,7 @@ def test_file_de_traitement_sous_processus(cfgm, tmp_path):
     assert e and "ISO-10303-21" in e["message"], diagnostic(ko)
     # relance : le résultat est effacé puis recalculé
     file.relancer(cfgm, ok[0], ok[2])
-    while (file.en_cours() or file.nb_attente()) and time.time() - debut < 180:
+    while file.occupee() and time.time() - debut < 180:
         time.sleep(0.2)
     assert maq.resultat(cfgm, ok[0], maq.cle_traitement(ok[2], cfgm)) is not None, diagnostic(ok)
 
@@ -219,6 +217,9 @@ def test_api_maquettes_et_emprises(client):
     assert len(r["maquettes"]) == 7
     em = client.get("/api/sig/maquettes/emprises").json()
     assert em["type"] == "FeatureCollection" and len(em["features"]) == 4
+    # liste allégée : emprise simplifiée pour le dessin, l'exacte reste côté serveur (interrogation croisée)
+    pos = [m["positionnement"] for m in r["maquettes"] if (m.get("positionnement") or {}).get("statut") == "positionnee"]
+    assert pos and all("emprise_affichage" in p and "emprise_geojson" not in p for p in pos)
 
 
 def test_api_modele_glb_et_objet(client):
@@ -229,7 +230,7 @@ def test_api_modele_glb_et_objet(client):
     assert glb.headers["content-type"] == "model/gltf-binary"
     import struct
     n = struct.unpack("<I", glb.content[12:16])[0]
-    guid = next(nd["name"] for nd in json.loads(glb.content[20:20 + n])["nodes"] if len(nd.get("name") or "") == 22)
+    guid = json.loads(glb.content[20:20 + n])["scenes"][0]["extras"]["guids"][0]
     fiche = client.get(f"/api/sig/maquettes/{m['id']}/objets/{guid}").json()
     assert fiche["type_ifc"] == "IfcWall" and "Données d'identification" in fiche["psets"]
     assert client.get(f"/api/sig/maquettes/{m['id']}/objets/inconnu").status_code == 404

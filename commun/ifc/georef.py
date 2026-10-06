@@ -18,6 +18,7 @@ Méthodes, par ordre de priorité (SPEC lot 3) :
 from __future__ import annotations
 
 import math
+import threading
 
 from pyproj import CRS, Transformer
 from pyproj.exceptions import CRSError
@@ -44,12 +45,31 @@ def _nom(crs: CRS) -> str:
     return f"EPSG:{epsg}" if epsg else crs.name
 
 
+_LOCAL = threading.local()
+
+
+def transformateur(source, cible) -> Transformer:
+    """Transformation entre deux systèmes (x, y dans l'ordre est, nord), mise en cache.
+
+    La création d'un Transformer coûte quelques millisecondes : la mettre en cache rend le positionnement de
+    centaines de maquettes quasi instantané. Un cache par fil, les Transformer n'étant pas partagés entre fils.
+    """
+    cache = getattr(_LOCAL, "cache", None)
+    if cache is None:
+        cache = _LOCAL.cache = {}
+    cle = tuple(c.srs if isinstance(c, CRS) else c for c in (source, cible))
+    t = cache.get(cle)
+    if t is None:
+        t = cache[cle] = Transformer.from_crs(source, cible, always_xy=True)
+    return t
+
+
 def _dans_domaine(crs: CRS, x: float, y: float, marge_deg: float = 0.5) -> bool:
     zone = crs.area_of_use
     if zone is None:
         return False
     try:
-        lon, lat = Transformer.from_crs(crs, 4326, always_xy=True).transform(x, y)
+        lon, lat = transformateur(crs, 4326).transform(x, y)
     except Exception:
         return False
     if not (math.isfinite(lon) and math.isfinite(lat)):
@@ -76,7 +96,7 @@ def vers_projete(repere: dict, x: float, y: float, z: float = 0.0) -> tuple[floa
 
 def _azimut_nord_vrai(crs: CRS, lon: float, lat: float) -> float:
     """Angle (degrés, sens horaire) du nord géographique par rapport au nord du quadrillage au point donné."""
-    t = Transformer.from_crs(4326, crs, always_xy=True)
+    t = transformateur(4326, crs)
     x0, y0 = t.transform(lon, lat)
     x1, y1 = t.transform(lon, lat + 0.001)
     return math.degrees(math.atan2(x1 - x0, y1 - y0))
@@ -155,7 +175,7 @@ def resoudre(brut: dict, systemes_candidats=(), tolerance_m: float = 2000.0, sys
     ecarts = {}
     if lat is not None and lon is not None:
         for c in domaine:
-            px, py = Transformer.from_crs(4326, c, always_xy=True).transform(lon, lat)
+            px, py = transformateur(4326, c).transform(lon, lat)
             ecarts[_nom(c)] = math.hypot(px - x, py - y)
     coherents = [n for n, d in ecarts.items() if d <= tolerance_m]
     detail = {"ecarts_latlon_m": {k: round(v, 1) for k, v in ecarts.items()}}
@@ -196,7 +216,7 @@ def resoudre(brut: dict, systemes_candidats=(), tolerance_m: float = 2000.0, sys
     if lat is not None and lon is not None and not (lat == 0 and lon == 0):
         if _dans_emprise(lon, lat, emprise_plausible_wgs84):
             crs = _crs(SYSTEME_REFERENCE)
-            px, py = Transformer.from_crs(4326, crs, always_xy=True).transform(lon, lat)
+            px, py = transformateur(4326, crs).transform(lon, lat)
             nord = brut.get("nord_geographique") or [0.0, 1.0]
             # angle (sens trigonométrique) dont il faut tourner la maquette pour aligner son nord sur le nord vrai,
             # puis correction de la convergence des méridiens du système projeté

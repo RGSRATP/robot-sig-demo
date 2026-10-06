@@ -160,22 +160,61 @@ def _glb(chemin):
 
 
 def test_geometrie_glb_et_emprise(jeu, tmp_path):
-    f = lecture.ouvrir(jeu[0] / "methode2a_site_cc49_identifie.ifc")
-    decalage = lecture.georef_brut(f)["site"]["origine"]
+    chemin = jeu[0] / "methode2a_site_cc49_identifie.ifc"
+    decalage = lecture.georef_brut(lecture.ouvrir(chemin))["site"]["origine"]
     avancement = []
-    r = geometrie.convertir(f, tmp_path / "m.glb", decalage, processus=1, progression=avancement.append)
-    assert r["nb_elements"] == 2 == r["nb_elements_attendus"]
-    assert avancement and avancement[-1] <= 100
-    g = _glb(tmp_path / "m.glb")
-    noms = {n.get("name") for n in g["nodes"]}
-    assert len({n for n in noms if n and len(n) == 22}) == 2   # un nœud par mur, nommé par son GlobalId
-    # coordonnées locales : petites malgré les coordonnées CC49 du site
-    maxi = max(abs(v) for a in g["accessors"] if "max" in a for v in a["max"])
-    assert maxi < 20
+    r = geometrie.convertir(chemin, tmp_path, decalage, petits_elements_m=0.3, progression=avancement.append,
+                            simplification_3d_m=0.005)
+    assert r["nb_elements"] == 2 and r["moteur"].startswith("web-ifc")
+    # deux pavés : 12 triangles chacun, rien à simplifier sans déformer
+    assert r["triangles"] == 24 and r["triangles_detail"] == 0
+    assert r["triangles_apres_simplification"] == r["triangles_avant_simplification"]
+    assert avancement and avancement[-1] == 100
+    g = _glb(tmp_path / "modele.glb")
+    # format allégé : compression meshopt, objets regroupés par couleur, table des GlobalId pour le clic
+    assert "EXT_meshopt_compression" in g["extensionsRequired"]
+    guids = g["scenes"][0]["extras"]["guids"]
+    assert len(guids) == 2 and all(len(x) == 22 for x in guids)
+    assert len(g["meshes"]) == 1   # deux murs de même couleur : un seul maillage
+    plages = g["meshes"][0]["primitives"][0]["extras"]["plages"]
+    assert plages[0] == 0 and sorted(plages[1::2]) == [0, 1]
+    assert not (tmp_path / "detail.glb").exists()   # aucun élément de moins de 0,3 m
+    # emprise en coordonnées locales (origine du site), à la simplification près :
+    # deux murs de 10 m × 0,2 m en équerre (recouvrement de 0,2 × 0,2 m)
     emprise = shape(r["emprise_locale"])
-    # deux murs de 10 m × 0,2 m en équerre (recouvrement de 0,2 × 0,2 m) — à la simplification près
     assert emprise.area == pytest.approx(2 * 2.0 - 0.04, rel=0.05)
-    assert r["z_min"] == pytest.approx(0.0, abs=1e-6) and r["z_max"] == pytest.approx(3.0, abs=1e-6)
+    assert max(abs(v) for v in emprise.bounds) < 20
+    assert r["z_min"] == pytest.approx(0.0, abs=1e-3) and r["z_max"] == pytest.approx(3.0, abs=1e-3)
+    # le modèle a sa propre origine, petite par rapport à celle du site
+    assert max(abs(v) for v in r["origine_glb"]) < 20
+
+
+def test_geometrie_objets_attendus_et_non_convertis(jeu, tmp_path):
+    chemin = jeu[0] / "methode2a_site_cc49_identifie.ifc"
+    attendus = geometrie.objets_attendus(lecture.ouvrir(chemin))
+    assert sorted(attendus.values()) == ["IfcWall", "IfcWall"]   # le local (IfcSpace) est exclu
+    geometrie.convertir(chemin, tmp_path)
+    assert geometrie.non_convertis(attendus, tmp_path) == {}
+    assert geometrie.non_convertis({**attendus, "0" * 22: "IfcBeam"}, tmp_path) == {"IfcBeam": 1}
+
+
+def test_geometrie_petits_elements_dans_le_detail(jeu, tmp_path):
+    chemin = jeu[0] / "methode2a_site_cc49_identifie.ifc"
+    r = geometrie.convertir(chemin, tmp_path, petits_elements_m=50)
+    assert r["taille_glb"] == 0 and r["taille_detail_glb"] > 0 and r["nb_petits_morceaux"] == r["nb_morceaux"]
+    assert not (tmp_path / "modele.glb").exists()
+    assert len(_glb(tmp_path / "detail.glb")["scenes"][0]["extras"]["guids"]) == 2
+
+
+def test_geometrie_lancement_en_deux_temps(jeu, tmp_path):
+    conv = geometrie.lancer(jeu[0] / "methode1_map_conversion_ifc4.ifc", tmp_path)
+    r = geometrie.terminer(conv, delai_s=60)
+    assert r["nb_elements"] >= 1 and (tmp_path / "modele.glb").is_file()
+
+
+def test_geometrie_echec_signale(tmp_path):
+    with pytest.raises(geometrie.ConversionImpossible):
+        geometrie.convertir(tmp_path / "absent.ifc", tmp_path / "sortie")
 
 
 def test_proprietes_index_et_fiche(jeu, tmp_path):

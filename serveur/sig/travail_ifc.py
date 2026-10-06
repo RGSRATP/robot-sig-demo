@@ -4,8 +4,8 @@ Lancé par serveur/sig/maquettes.py :
     python -m serveur.sig.travail_ifc <fichier.ifc> <dossier_sortie> <parametres.json>
 
 Tâches : « complet » (modèle 3D, propriétés, locaux) ou « locaux » seuls (maquette déjà traitée).
-Écrit dans le dossier de sortie : etat.json (avancement), modele.glb, proprietes.sqlite, locaux.json, puis
-resultat.json en dernier (sa présence signifie « traitement terminé »). Un processus séparé isole la mémoire et les
+Écrit dans le dossier de sortie : etat.json (avancement), modele.glb et detail.glb (convertisseur web-ifc, lancé
+en parallèle de la lecture IfcOpenShell), proprietes.sqlite, locaux.json, puis resultat.json en dernier (sa présence signifie « traitement terminé »). Un processus séparé isole la mémoire et les
 plantages éventuels d'IfcOpenShell : le serveur reste disponible.
 """
 from __future__ import annotations
@@ -28,35 +28,44 @@ def _ecrire(chemin: Path, donnees: dict) -> None:
 def traiter(ifc: Path, sortie: Path, params: dict) -> dict:
     sortie.mkdir(parents=True, exist_ok=True)
     debut = time.time()
-    # poids des phases dans la progression globale
-    phases = {"ouverture": (0, 10), "geometrie": (10, 80), "proprietes": (80, 95), "locaux": (95, 100)}
+    # poids des phases dans la progression globale ; la conversion 3D (web-ifc) tourne pendant la lecture
+    phases = {"ouverture": (0, 35), "proprietes": (35, 80), "locaux": (80, 90), "geometrie": (90, 100)}
 
     def etat(phase: str, p: int = 0, message: str = "") -> None:
         a, b = phases[phase]
         _ecrire(sortie / "etat.json", {"phase": phase, "progression": round(a + (b - a) * p / 100),
                                        "message": message, "debut": debut, "cle": params["cle"]})
 
-    etat("ouverture", 0, "lecture du fichier IFC")
-    f = lecture.ouvrir(ifc)
-    meta = lecture.metadonnees(f)
-    brut = lecture.georef_brut(f)
-    decalage = brut["site"]["origine"] if brut.get("site") else [0.0, 0.0, 0.0]
-
-    etat("geometrie", 0, "modèle 3D et emprise au sol")
-    geo = geometrie.convertir(
-        f, sortie / "modele.glb", decalage, exclure=params["exclure"], deflexion_m=params["deflexion_lineaire_m"],
-        simplification_m=params["simplification_emprise_m"],
-        progression=lambda p: etat("geometrie", p, "modèle 3D et emprise au sol"))
-
-    etat("proprietes", 0, "index des propriétés")
-    nb = proprietes.indexer(f, sortie / "proprietes.sqlite",
-                            progression=lambda p: etat("proprietes", p, "index des propriétés"))
-
-    etat("locaux", 0, "locaux")
+    etat("ouverture", 0, "lecture du fichier IFC et conversion 3D")
+    conversion = geometrie.lancer(ifc, sortie, exclure=params["exclure"], petits_elements_m=params["petits_elements_m"],
+                                  simplification_3d_m=params["simplification_3d_m"])
     try:
-        _ecrire_locaux(f, decalage, sortie, params, lambda p: etat("locaux", p, "locaux"))
-    except Exception as e:  # l'échec des locaux n'empêche pas d'afficher la maquette
-        _ecrire(sortie / "erreur_locaux.json", {"cle": params["cle_locaux"], "message": f"{type(e).__name__} : {e}"})
+        f = lecture.ouvrir(ifc)
+        meta = lecture.metadonnees(f)
+        brut = lecture.georef_brut(f)
+        decalage = brut["site"]["origine"] if brut.get("site") else [0.0, 0.0, 0.0]
+        attendus = geometrie.objets_attendus(f, params["exclure"])
+
+        etat("proprietes", 0, "index des propriétés")
+        nb = proprietes.indexer(f, sortie / "proprietes.sqlite",
+                                progression=lambda p: etat("proprietes", p, "index des propriétés"))
+
+        etat("locaux", 0, "locaux")
+        try:
+            _ecrire_locaux(f, decalage, sortie, params, lambda p: etat("locaux", p, "locaux"))
+        except Exception as e:  # l'échec des locaux n'empêche pas d'afficher la maquette
+            _ecrire(sortie / "erreur_locaux.json", {"cle": params["cle_locaux"], "message": f"{type(e).__name__} : {e}"})
+        del f   # libère la mémoire d'IfcOpenShell avant la fin de la conversion
+
+        etat("geometrie", 0, "modèle 3D")
+        geo = geometrie.terminer(conversion, decalage, simplification_m=params["simplification_emprise_m"],
+                                 simplification_affichage_m=params["simplification_emprise_affichage_m"],
+                                 delai_s=float(params["delai_max_minutes"]) * 60,
+                                 progression=lambda p: etat("geometrie", p, "modèle 3D"))
+    finally:
+        geometrie.arreter_processus(conversion.processus)
+    geo["nb_elements_attendus"] = len(attendus)
+    geo["non_convertis"] = geometrie.non_convertis(attendus, sortie)
 
     resultat = {"cle": params["cle"], "version_module": VERSION_MODULE, "metadonnees": meta, "georef_brut": brut,
                 "decalage": decalage, "geometrie": geo, "nb_objets_index": nb,
@@ -96,7 +105,7 @@ def main(argv: list[str]) -> int:
     try:
         (traiter_locaux if locaux_seuls else traiter)(ifc, sortie, params)
         return 0
-    except lecture.MaquetteIllisible as e:
+    except (lecture.MaquetteIllisible, geometrie.ConversionImpossible) as e:
         message = str(e)
     except MemoryError:
         message = "mémoire insuffisante pour traiter cette maquette"

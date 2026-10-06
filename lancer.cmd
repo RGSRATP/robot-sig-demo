@@ -31,6 +31,20 @@ if defined INSTALLER (
   rmdir /s /q "interface\dist" 2> nul
 )
 
+rem Convertisseur 3D des maquettes (web-ifc, Node) : dépendances absentes ou package.json modifié.
+set "INSTALLER="
+if not exist "commun\ifc\convertisseur\node_modules\.package-lock.json" set "INSTALLER=1"
+if not defined INSTALLER (
+  powershell -NoProfile -Command "if ((Get-Item 'commun\ifc\convertisseur\package.json').LastWriteTime -gt (Get-Item 'commun\ifc\convertisseur\node_modules\.package-lock.json').LastWriteTime) { exit 1 }"
+  if errorlevel 1 set "INSTALLER=1"
+)
+if defined INSTALLER (
+  echo Installation du convertisseur 3D des maquettes...
+  pushd commun\ifc\convertisseur
+  call npm install --proxy http://127.0.0.1:9000 --https-proxy http://127.0.0.1:9000
+  popd
+)
+
 rem Interface construite mais plus ancienne que ses sources : on la reconstruit.
 if exist "interface\dist\index.html" (
   powershell -NoProfile -Command "$d = (Get-Item 'interface\dist\index.html').LastWriteTime; $s = Get-ChildItem 'interface\sig','interface\main.js','interface\index.html','interface\vite.config.js','interface\package.json' -Recurse -File | Where-Object { $_.LastWriteTime -gt $d }; if ($s) { exit 1 }"

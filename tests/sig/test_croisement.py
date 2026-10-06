@@ -160,9 +160,7 @@ def client(cfg_test, monkeypatch, tmp_path_factory):
         sortie.mkdir(parents=True)
         t = cfgm["traitement"]
         p = sortie / "parametres.json"
-        p.write_text(__import__("json").dumps({"cle": maq.cle_traitement(chemin, cfgm), "cle_locaux": maq.cle_locaux(chemin, cfgm),
-                                               "exclure": t["exclure"], "deflexion_lineaire_m": t["deflexion_lineaire_m"],
-                                               "simplification_emprise_m": t["simplification_emprise_m"]}), encoding="utf-8")
+        p.write_text(__import__("json").dumps(maq.parametres_traitement(chemin, cfgm)), encoding="utf-8")
         __import__("serveur.sig.travail_ifc", fromlist=["main"]).main([str(chemin), str(sortie), str(p)])
     monkeypatch.setattr(maq, "fabrique_client", lambda cfg: httpx.Client(
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"elevations": [60.0]}))))

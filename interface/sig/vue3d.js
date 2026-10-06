@@ -7,13 +7,28 @@
 // par rapport au terrain ; la matrice locale → Mercator en est déduite ici, en double précision. La scène
 // Three.js est exprimée en mètres autour d'un point de référence commun (unités Mercator ramenées au mètre) :
 // les nombres restent petits pour le GPU et l'éclairage à facettes reste précis.
+//
+// Modèles (convertisseur web-ifc de commun/ifc) : objets regroupés par couleur en quelques maillages compressés
+// (meshopt). Chaque maillage porte `plages` = [premier triangle, indice d'objet, …] et la scène du GLB la table
+// `guids` : le clic retrouve l'objet par le triangle touché. Les petits éléments sont dans un second GLB (détail).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { MercatorCoordinate } from 'maplibre-gl';
 
 const COULEUR_SELECTION = 0xe8b400;
 const COULEUR_CONTOUR_PLAN = 0x2b3137;
-const MOTIF_GUID = /^[0-9A-Za-z_$]{22}$/;
+
+/** Indice d'objet du triangle `face` d'après les plages [premier triangle, objet, …] (recherche dichotomique). */
+function objetDuTriangle(plages, face) {
+  let bas = 0;
+  let haut = plages.length / 2 - 1;
+  while (bas < haut) {
+    const milieu = (bas + haut + 1) >> 1;
+    if (plages[milieu * 2] <= face) bas = milieu; else haut = milieu - 1;
+  }
+  return plages[bas * 2 + 1];
+}
 
 export class CoucheMaquettes3D {
   constructor() {
@@ -31,6 +46,7 @@ export class CoucheMaquettes3D {
       roughness: 0.6, side: THREE.DoubleSide, flatShading: true,
     });
     this.chargeur = new GLTFLoader();
+    this.chargeur.setMeshoptDecoder(MeshoptDecoder);
     this.plan = null;           // { id, groupe, volume } : plan des locaux d'un niveau
     this.matContour = new THREE.LineBasicMaterial({ color: COULEUR_CONTOUR_PLAN, transparent: true, opacity: 0.9 });
     this.matVolume = new THREE.MeshBasicMaterial({ color: COULEUR_SELECTION, transparent: true, opacity: 0.38,
@@ -78,7 +94,8 @@ export class CoucheMaquettes3D {
 
   // ---------------------------------------------------------------- modèles
 
-  // Matrice locale (mètres, Z vertical) → scène. gltf : le modèle glTF a l'axe Y vertical.
+  // Matrice locale (mètres, Z vertical) → scène. gltf : le modèle glTF a l'axe Y vertical et sa propre origine
+  // (affichage.origine_modele, en coordonnées locales).
   _matrice(affichage, gltf = true) {
     const o = MercatorCoordinate.fromLngLat(affichage.origine);
     const ax = MercatorCoordinate.fromLngLat(affichage.axe_x);
@@ -97,48 +114,79 @@ export class CoucheMaquettes3D {
       0, 0, k * sz, k * affichage.decalage_z_m * sz,
       0, 0, 0, 1,
     );
-    // glTF : Y vertical → Z vertical
-    return gltf ? m.multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)) : m;
+    if (!gltf) return m;
+    // glTF : Y vertical → Z vertical, puis origine du modèle (x, y, z local → x, z, -y glTF)
+    const [ox, oy, oz] = affichage.origine_modele || [0, 0, 0];
+    return m.multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2))
+      .multiply(new THREE.Matrix4().makeTranslation(ox, oz, -oy));
+  }
+
+  /** Lit un GLB et prépare ses matériaux (ombrage à facettes, mats, deux faces). */
+  _lireGlb(url, progression) {
+    return new Promise((resolve, reject) => {
+      this.chargeur.load(url, (gltf) => {
+        gltf.scene.traverse((o) => {
+          if (!o.isMesh) return;
+          for (const mat of [o.material].flat()) {
+            // pas de normales dans les modèles : normales calculées dans le shader
+            mat.flatShading = true;
+            if (mat.isMeshStandardMaterial) { mat.roughness = Math.max(mat.roughness, 0.75); mat.metalness = 0; }
+            mat.side = THREE.DoubleSide;
+            mat.userData.opaciteOrigine = mat.opacity;
+            mat.userData.transparentOrigine = mat.transparent;
+          }
+        });
+        resolve(gltf.scene);
+      }, (e) => progression?.(e.total ? e.loaded / e.total : null), reject);
+    });
   }
 
   charger(id, url, affichage, progression) {
     if (this.modeles.has(id)) return this.modeles.get(id).chargement;
-    const entree = { groupe: null, opacite: 1, visible: true };
-    entree.chargement = new Promise((resolve, reject) => {
-      this.chargeur.load(url, (gltf) => {
-        const groupe = new THREE.Group();
-        groupe.matrixAutoUpdate = false;
-        groupe.matrix.copy(this._matrice(affichage));
-        groupe.add(gltf.scene);
-        groupe.userData.idModele = id;
-        gltf.scene.traverse((o) => {
-          if (o.isMesh) {
-            const mats = Array.isArray(o.material) ? o.material : [o.material];
-            for (const mat of mats) {
-              // Les GLB d'IfcOpenShell n'ont pas de normales : ombrage à facettes (normales calculées dans le shader),
-              // matériaux mats (les rugosités exportées sont souvent quasi nulles).
-              mat.flatShading = true;
-              if (mat.isMeshStandardMaterial) { mat.roughness = Math.max(mat.roughness, 0.75); mat.metalness = 0; }
-              mat.side = THREE.DoubleSide;
-              mat.userData.opaciteOrigine = mat.opacity;
-              mat.userData.transparentOrigine = mat.transparent;
-            }
-          }
-        });
-        groupe.updateMatrixWorld(true);
-        entree.groupe = groupe;
-        if (!this.modeles.has(id)) return;   // retiré pendant le chargement
-        this.scene.add(groupe);
-        this._appliquer(id);
-        this.carte.triggerRepaint();
-        resolve(groupe);
-      }, (e) => progression?.(e.total ? e.loaded / e.total : null), (err) => {
-        this.modeles.delete(id);
-        reject(err);
-      });
+    const entree = { groupe: null, opacite: 1, visible: true, detail: null, voirDetail: false };
+    entree.chargement = this._lireGlb(url, progression).then((scene) => {
+      const groupe = new THREE.Group();
+      groupe.matrixAutoUpdate = false;
+      groupe.matrix.copy(this._matrice(affichage));
+      groupe.add(scene);
+      groupe.userData.idModele = id;
+      groupe.updateMatrixWorld(true);
+      entree.groupe = groupe;
+      if (this.modeles.get(id) !== entree) return groupe;   // retiré pendant le chargement
+      this.scene.add(groupe);
+      this._appliquer(id);
+      return groupe;
+    }, (err) => {
+      if (this.modeles.get(id) === entree) this.modeles.delete(id);
+      throw err;
     });
     this.modeles.set(id, entree);
     return entree.chargement;
+  }
+
+  /** Petits éléments (second GLB) : chargés une fois, puis affichés ou masqués selon le zoom. */
+  async montrerDetail(id, url, visible) {
+    const m = this.modeles.get(id);
+    if (!m) return;
+    m.voirDetail = visible;
+    if (visible && !m.detail) {
+      m.detail = 'chargement';
+      try {
+        await m.chargement;
+        const scene = await this._lireGlb(url);
+        if (this.modeles.get(id) !== m) return;
+        m.groupe.add(scene);
+        m.groupe.updateMatrixWorld(true);
+        m.detail = scene;
+      } catch (e) {
+        m.detail = null;
+        return;
+      }
+    }
+    if (m.detail && m.detail !== 'chargement') {
+      m.detail.visible = m.voirDetail;
+      this._appliquer(id);
+    }
   }
 
   retirer(id) {
@@ -311,7 +359,7 @@ export class CoucheMaquettes3D {
     return null;
   }
 
-  /** Objet de maquette sous le point écran { x, y } (pixels CSS), ou null. */
+  /** Objet de maquette sous le point écran { x, y } (pixels CSS) : { id, guid, groupe }, ou null. */
   objetSous(point) {
     if (!this.modeles.size || !this.camera || !this.reference) return null;
     const rayon = this._rayon(point);
@@ -319,28 +367,61 @@ export class CoucheMaquettes3D {
       .filter(([k, m]) => m.groupe && m.visible && (!this.isole || this.isole === k)).map(([, m]) => m.groupe);
     for (const hit of rayon.intersectObjects(cibles, true)) {
       if (this.coupe != null && hit.point.z > this.coupe) continue;
-      let o = hit.object;
-      while (o && !MOTIF_GUID.test(o.name || '')) o = o.parent;
-      let racine = hit.object;
+      const plages = hit.object.geometry.userData.plages;
+      if (!plages || hit.faceIndex == null) continue;   // surbrillance (sans plages) ou objet étranger
+      let scene = hit.object;
+      while (scene && !scene.userData.guids) scene = scene.parent;
+      let racine = scene;
       while (racine && racine.userData.idModele == null) racine = racine.parent;
-      if (o && racine) return { id: racine.userData.idModele, guid: o.name, noeud: o };
+      if (!scene || !racine) continue;
+      const objet = objetDuTriangle(plages, hit.faceIndex);
+      return { id: racine.userData.idModele, guid: scene.userData.guids[objet], groupe: racine };
     }
     return null;
   }
 
+  /** Surbrillance d'un objet : ses triangles (dans chaque maillage et chaque GLB) redessinés en doré. */
   selectionner(cible) {
     this.deselectionner();
     if (!cible) return;
-    const meshes = [];
-    cible.noeud.traverse((o) => { if (o.isMesh) meshes.push(o); });
-    this.selection = { id: cible.id, guid: cible.guid, meshes, materiaux: meshes.map((m) => m.material) };
-    for (const m of meshes) m.material = this.matSelection;
+    const ajouts = [];
+    cible.groupe.traverse((scene) => {
+      const guids = scene.userData.guids;
+      if (!guids) return;
+      const objet = guids.indexOf(cible.guid);
+      if (objet < 0) return;
+      scene.traverse((o) => {
+        const plages = o.isMesh && o.geometry.userData.plages;
+        if (!plages) return;
+        const index = o.geometry.index.array;
+        const morceaux = [];
+        for (let i = 0; i < plages.length; i += 2) {
+          if (plages[i + 1] !== objet) continue;
+          const fin = i + 2 < plages.length ? plages[i + 2] : index.length / 3;
+          morceaux.push(index.subarray(plages[i] * 3, fin * 3));
+        }
+        if (!morceaux.length) return;
+        const sousIndex = new Uint32Array(morceaux.reduce((t, m) => t + m.length, 0));
+        let k = 0;
+        for (const m of morceaux) { sousIndex.set(m, k); k += m.length; }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', o.geometry.getAttribute('position'));   // partagé avec le maillage
+        geo.setIndex(new THREE.BufferAttribute(sousIndex, 1));
+        const surbrillance = new THREE.Mesh(geo, this.matSelection);
+        surbrillance.renderOrder = 1;
+        o.add(surbrillance);
+        surbrillance.updateMatrixWorld(true);
+        ajouts.push(surbrillance);
+      });
+    });
+    this.selection = { id: cible.id, guid: cible.guid, ajouts };
     this.carte.triggerRepaint();
   }
 
   deselectionner() {
     if (!this.selection) return;
-    this.selection.meshes.forEach((m, i) => { m.material = this.selection.materiaux[i]; });
+    // la surbrillance partage les positions du maillage : pas de dispose() (il les retirerait aussi du GPU)
+    for (const m of this.selection.ajouts) m.removeFromParent();
     this.selection = null;
     this.carte?.triggerRepaint();
   }

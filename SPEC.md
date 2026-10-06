@@ -88,7 +88,7 @@ Géoplateforme IGN, appelée par le navigateur à travers le proxy du poste :
 
 ## 6. Pile technique
 
-Identique au `demonstrateur-patrimoine` : Python + FastAPI (serveur), interface Vite avec MapLibre GL JS (carte) et la visionneuse IFC existante (3D), pytest. Lecture IFC côté serveur avec IfcOpenShell.
+Identique au `demonstrateur-patrimoine` : Python + FastAPI (serveur), interface Vite avec MapLibre GL JS (carte) et la visionneuse IFC existante (3D), pytest. Lecture IFC côté serveur avec IfcOpenShell ; conversion 3D par web-ifc, le moteur de la visionneuse (évolution du 2026-10-06, voir `DECISIONS.md`).
 
 ## 7. Lecture IFC partagée
 

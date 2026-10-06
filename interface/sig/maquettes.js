@@ -38,6 +38,7 @@ export class GestionnaireMaquettes {
     this.maquettes = new Map();   // id -> données serveur
     this.affichees = new Set();   // ids dont la 3D est demandée
     this.masquees = new Set();    // ids masqués par l'utilisateur (pas de rechargement automatique)
+    this.details = new Set();     // ids dont les petits éléments sont chargés
     this.progression = new Map(); // id -> texte de chargement 3D
     this.ouverts = new Set();     // nœuds dépliés de l'arborescence
     this.filtre = '';
@@ -59,23 +60,70 @@ export class GestionnaireMaquettes {
         paint: { 'text-color': '#003a5d', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
     }
     this.carte.addLayer(this.c3d);
-    this.carte.on('moveend', () => this._chargerALaVue());
+    this.carte.on('moveend', () => { this._chargerALaVue(); this._details(); });
     this.panneau.replaceChildren(el('p', { className: 'sig-info', textContent: 'Inventaire des maquettes…' }));
     await this.actualiser();
   }
 
-  /** Charge en 3D les maquettes légères visibles à l'écran, à partir du zoom configuré. */
+  /** Distance (carré, degrés) du centre d'une maquette au centre de la vue : les plus proches d'abord. */
+  _eloignement(m) {
+    const c = this.carte.getCenter();
+    const [x, y] = m.positionnement.centre_wgs84;
+    return (x - c.lng) ** 2 + (y - c.lat) ** 2;
+  }
+
+  /** Triangles déjà chargés (modèles et petits éléments) : la charge de la carte graphique, pour le budget
+   *  du chargement automatique. */
+  _charge() {
+    let n = 0;
+    for (const id of this.affichees) {
+      const a = this.maquettes.get(id)?.positionnement?.affichage;
+      if (a) n += a.triangles + (this.details.has(id) ? a.triangles_detail : 0);
+    }
+    return n;
+  }
+
+  /** Charge en 3D les maquettes légères visibles, à partir du zoom configuré, les plus proches du centre d'abord,
+   *  dans la limite du budget (les autres restent disponibles à la demande). */
   _chargerALaVue() {
     const seuil = this.inventaire?.zoom_chargement_automatique;
     if (seuil == null || this.carte.getZoom() < seuil) return;
     const b = this.carte.getBounds();
+    const candidates = [];
     for (const m of this.maquettes.values()) {
       const pos = m.positionnement;
       if (m.etat.phase !== 'pret' || pos?.statut !== 'positionnee' || pos.locaux_seuls || !pos.affichage.chargement_automatique) continue;
       if (this.affichees.has(m.id) || this.masquees.has(m.id)) continue;
       const [x1, y1, x2, y2] = pos.emprise_wgs84;
       if (x2 < b.getWest() || x1 > b.getEast() || y2 < b.getSouth() || y1 > b.getNorth()) continue;
+      candidates.push(m);
+    }
+    let n = this._charge();
+    const budget = this.inventaire.budget_triangles;
+    for (const m of candidates.sort((p, q) => this._eloignement(p) - this._eloignement(q))) {
+      if (n + m.positionnement.affichage.triangles > budget) continue;
+      n += m.positionnement.affichage.triangles;
       this.afficher3d(m.id, true);
+    }
+  }
+
+  /** Petits éléments (boulons, platines…) des maquettes affichées : en vue rapprochée, dans la limite du budget. */
+  _details() {
+    const seuil = this.inventaire?.zoom_details;
+    if (seuil == null) return;
+    const proche = this.carte.getZoom() >= seuil;
+    let n = this._charge();
+    const budget = this.inventaire.budget_triangles;
+    const ids = [...this.affichees].filter((id) => this.maquettes.get(id)?.positionnement?.affichage?.detail)
+      .sort((p, q) => this._eloignement(this.maquettes.get(p)) - this._eloignement(this.maquettes.get(q)));
+    for (const id of ids) {
+      const a = this.maquettes.get(id).positionnement.affichage;
+      if (proche && !this.details.has(id)) {
+        if (n + a.triangles_detail > budget) continue;
+        n += a.triangles_detail;
+        this.details.add(id);
+      }
+      if (this.details.has(id)) this.c3d.montrerDetail(id, `api/sig/maquettes/${id}/detail.glb`, proche);
     }
   }
 
@@ -126,7 +174,7 @@ export class GestionnaireMaquettes {
     for (const m of this.maquettes.values()) {
       const pos = m.positionnement;
       if (pos?.statut !== 'positionnee') continue;
-      features.push({ type: 'Feature', geometry: pos.emprise_geojson, properties: { id: m.id, nom: m.nomCourt } });
+      features.push({ type: 'Feature', geometry: pos.emprise_affichage, properties: { id: m.id, nom: m.nomCourt } });
     }
     this.carte.getSource('sig-maquettes').setData({ type: 'FeatureCollection', features });
     for (const id of this.affichees) {
@@ -155,6 +203,7 @@ export class GestionnaireMaquettes {
       });
       this.progression.delete(id);
       this.c3d.definir(id, { visible: true });
+      this._details();
     } catch (e) {
       this.affichees.delete(id);
       this.progression.set(id, `3D indisponible : ${e.message || e}`);
@@ -166,6 +215,7 @@ export class GestionnaireMaquettes {
 
   masquer3d(id) {
     this.affichees.delete(id);
+    this.details.delete(id);
     this.masquees.add(id);
     this.c3d.retirer(id);
     this.progression.delete(id);

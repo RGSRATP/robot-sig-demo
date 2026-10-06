@@ -4,15 +4,23 @@
 dossier_ifc: "donnees/ifc"         # relatif à la racine du projet ; parcouru avec ses sous-dossiers
 dossier_cache: "cache/ifc"         # modèles 3D (GLB), emprises et index des propriétés, hors Git
 
+# La 3D est convertie par web-ifc (commun/ifc/convertisseur) en modèles allégés ; IfcOpenShell lit en parallèle
+# les propriétés et les locaux.
 traitement:
-  deflexion_lineaire_m: 0.02       # finesse des surfaces courbes du modèle 3D (plus grand = plus léger)
   exclure: ["IfcSpace", "IfcOpeningElement", "IfcAnnotation", "IfcGrid", "IfcVirtualElement"]
+  petits_elements_m: 0.30          # pièces plus petites (plus grande dimension) : modèle « détail », vue rapprochée
+  simplification_3d_m: 0.005        # écart maximal toléré en simplifiant les surfaces (5 mm : invisible)
   simplification_emprise_m: 0.05   # tolérance de simplification de l'emprise au sol
-  delai_max_minutes: 90            # au-delà, le traitement d'une maquette est interrompu et signalé
+  simplification_emprise_affichage_m: 0.5   # emprise dessinée sur la carte : morceaux proches fusionnés
+  delai_max_minutes: 15            # au-delà, le traitement d'une maquette est interrompu et signalé
+  traitements_simultanes: 2        # maquettes traitées en même temps (mémoire : jusqu'à 3 Go par grosse maquette)
 
 affichage_3d:
   chargement_automatique_max_mo: 25   # modèles 3D plus lourds : chargés à la demande (bouton)
   zoom_chargement_automatique: 15      # les maquettes légères se chargent quand elles sont à l'écran à partir de ce zoom
+  zoom_details: 18                     # petits éléments affichés à partir de ce zoom
+  budget_triangles_millions: 6         # 3D chargée automatiquement (triangles, petits éléments compris) ;
+                                       # au-delà, à la demande. 6 M : fluide sur une carte graphique intégrée
 
 # Identification du système des coordonnées projetées portées par l'IfcSite (coordonnées partagées) :
 # le système candidat retenu est celui où RefLatitude/RefLongitude tombent à moins de « tolerance_m » du site.
