@@ -22,6 +22,9 @@ identification:
   systemes_candidats: ["EPSG:2154", "EPSG:3949"]
   tolerance_m: 2000
   emprise_plausible_wgs84: [1.40, 48.10, 3.60, 49.30]
+  # Objets plus loin que cela de l'origine du site : ils portent leurs propres coordonnées (projetées) ;
+  # RefLatitude/RefLongitude ne sont alors pas utilisées seules (sinon la maquette serait déplacée de centaines de km)
+  ecart_max_geometrie_m: 20000
 
 altimetrie:
   url: "https://altimetrie.test/elevation.json"   # faux service des tests

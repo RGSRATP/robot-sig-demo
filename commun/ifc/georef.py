@@ -12,7 +12,10 @@ Méthodes, par ordre de priorité (SPEC lot 3) :
    a. coordonnées projetées portées par le placement du site (coordonnées partagées des logiciels
       auteurs) ; le système n'est jamais supposé : il est identifié par la cohérence avec
       RefLatitude / RefLongitude parmi les systèmes candidats, ou déclaré par l'appelant ;
-   b. RefLatitude / RefLongitude seules (point + nord géographique), si elles tombent dans l'emprise plausible ;
+      variante : site à l'origine, mais objets dessinés directement en coordonnées projetées (le centre
+      de la géométrie, transmis par l'appelant, sert alors de point de contrôle) ;
+   b. RefLatitude / RefLongitude seules (point + nord géographique), si elles tombent dans l'emprise plausible
+      et que la géométrie reste proche de l'origine du site ;
 3. saisie manuelle transmise par l'appelant (utilisée en dernier, ou en premier si « forcer »).
 """
 from __future__ import annotations
@@ -129,7 +132,8 @@ def _manuel(manuel: dict, decalage, avert) -> dict:
 
 
 def resoudre(brut: dict, systemes_candidats=(), tolerance_m: float = 2000.0, systeme_declare: str | None = None,
-             emprise_plausible_wgs84=None, manuel: dict | None = None) -> dict:
+             emprise_plausible_wgs84=None, manuel: dict | None = None, centre_geometrie=None,
+             ecart_max_geometrie_m: float | None = None) -> dict:
     """Positionnement d'une maquette : méthode, système, repère, avertissements (ou raison du non-positionnement).
 
     - systemes_candidats : systèmes parmi lesquels identifier celui des coordonnées projetées du site ;
@@ -137,7 +141,10 @@ def resoudre(brut: dict, systemes_candidats=(), tolerance_m: float = 2000.0, sys
     - systeme_declare : système des coordonnées projetées du site, déclaré par l'appelant ;
     - emprise_plausible_wgs84 : [ouest, sud, est, nord] ; une latitude/longitude hors de cette emprise est rejetée
       (valeur par défaut du logiciel auteur) ;
-    - manuel : {"x", "y", "altitude", "rotation_deg", "systeme" (défaut Lambert 93), "forcer"}.
+    - manuel : {"x", "y", "altitude", "rotation_deg", "systeme" (défaut Lambert 93), "forcer"} ;
+    - centre_geometrie : (x, y) centre de l'emprise des objets, en coordonnées locales (monde − origine du site) ;
+    - ecart_max_geometrie_m : au-delà de cette distance entre la géométrie et l'origine du site, les objets portent
+      leurs propres coordonnées : la méthode « RefLatitude / RefLongitude seules » est refusée.
     """
     avert: list[str] = []
     site = brut.get("site")
@@ -172,11 +179,23 @@ def resoudre(brut: dict, systemes_candidats=(), tolerance_m: float = 2000.0, sys
     lat, lon = site.get("latitude"), site.get("longitude")
     candidats = [c for c in (_crs(s) for s in systemes_candidats) if c is not None]
     domaine = [c for c in candidats if _dans_domaine(c, x, y)]
+    # variante : site à l'origine, objets en coordonnées projetées ; le contrôle porte sur le centre de la géométrie.
+    # Le repère reste celui du site : projeté = origine du site + local = coordonnées monde.
+    xc, yc = x, y
+    eloignement = 0.0
+    if centre_geometrie is not None:
+        eloignement = math.hypot(centre_geometrie[0], centre_geometrie[1])
+        gx, gy = x + centre_geometrie[0], y + centre_geometrie[1]
+        domaine_geometrie = [c for c in candidats if _dans_domaine(c, gx, gy)]
+        if not domaine and domaine_geometrie:
+            xc, yc, domaine = gx, gy, domaine_geometrie
+            avert.append(f"site à l'origine ({x:.0f}, {y:.0f}) mais objets en coordonnées projetées "
+                         f"(centre {gx:.0f}, {gy:.0f}) : contrôle sur la géométrie")
     ecarts = {}
     if lat is not None and lon is not None:
         for c in domaine:
             px, py = transformateur(4326, c).transform(lon, lat)
-            ecarts[_nom(c)] = math.hypot(px - x, py - y)
+            ecarts[_nom(c)] = math.hypot(px - xc, py - yc)
     coherents = [n for n, d in ecarts.items() if d <= tolerance_m]
     detail = {"ecarts_latlon_m": {k: round(v, 1) for k, v in ecarts.items()}}
 
@@ -194,8 +213,8 @@ def resoudre(brut: dict, systemes_candidats=(), tolerance_m: float = 2000.0, sys
             crs = _crs(systeme_declare)
             if crs is None:
                 return _non_positionnee(f"système déclaré « {systeme_declare} » non reconnu", avert, **detail)
-            if not _dans_domaine(crs, x, y):
-                return _non_positionnee(f"coordonnées du site ({x:.0f}, {y:.0f}) hors du domaine du système déclaré "
+            if not _dans_domaine(crs, xc, yc):
+                return _non_positionnee(f"coordonnées du site ({xc:.0f}, {yc:.0f}) hors du domaine du système déclaré "
                                         f"{_nom(crs)}", avert, **detail)
             if ecarts and not coherents:
                 plus_proche = min(ecarts.values())
@@ -209,11 +228,15 @@ def resoudre(brut: dict, systemes_candidats=(), tolerance_m: float = 2000.0, sys
         noms = ", ".join(_nom(c) for c in domaine)
         motif = ("RefLatitude/RefLongitude absentes" if not ecarts
                  else f"RefLatitude/RefLongitude incohérentes (écart minimal {min(ecarts.values()) / 1000:.1f} km)")
-        return _non_positionnee(f"le site porte des coordonnées projetées ({x:.0f}, {y:.0f}) compatibles avec {noms}, "
+        return _non_positionnee(f"la maquette porte des coordonnées projetées ({xc:.0f}, {yc:.0f}) compatibles avec {noms}, "
                                 f"mais {motif} : système à déclarer", avert, **detail)
 
     # 2b. RefLatitude / RefLongitude seules
-    if lat is not None and lon is not None and not (lat == 0 and lon == 0):
+    loin = ecart_max_geometrie_m is not None and eloignement > ecart_max_geometrie_m
+    if lat is not None and lon is not None and not (lat == 0 and lon == 0) and loin:
+        avert.append(f"objets à {eloignement / 1000:.0f} km de l'origine du site, hors de tout système candidat : "
+                     "RefLatitude/RefLongitude inutilisables")
+    elif lat is not None and lon is not None and not (lat == 0 and lon == 0):
         if _dans_emprise(lon, lat, emprise_plausible_wgs84):
             crs = _crs(SYSTEME_REFERENCE)
             px, py = transformateur(4326, crs).transform(lon, lat)

@@ -30,6 +30,9 @@ identification:
   tolerance_m: 2000
   # RefLatitude/RefLongitude hors de cette emprise (ouest, sud, est, nord) : valeur par défaut du logiciel, ignorées
   emprise_plausible_wgs84: [1.40, 48.10, 3.60, 49.30]
+  # Objets plus loin que cela de l'origine du site : ils portent leurs propres coordonnées (projetées) ;
+  # RefLatitude/RefLongitude ne sont alors pas utilisées seules (sinon la maquette serait déplacée de centaines de km)
+  ecart_max_geometrie_m: 20000
 
 # Calage vertical : les maquettes sont posées par rapport au terrain (RGE ALTI de l'IGN, interrogé par le serveur).
 altimetrie:
@@ -47,6 +50,18 @@ systemes_declares:
       Déclaration du 2026-10-05 : toutes les maquettes L18 dont RefLatitude/RefLongitude sont exploitables
       identifient le CC49 (coordonnées partagées Revit) ; les autres portent la position par défaut de Revit
       (Boston, Paris) mais des coordonnées de site dans le domaine du CC49.
+  - motif: "L15/**"
+    systeme: "EPSG:3949"
+    justification: &cc49_lignes >-
+      Déclaration de l'utilisateur du 2026-10-07 : toutes les lignes du Grand Paris Express sont en CC49.
+      Constat : les 48 maquettes L15 dont le système est identifiable sont en CC49 ; les maquettes non
+      positionnées de L15 et L16 ont toutes des coordonnées compatibles avec le seul CC49.
+  - motif: "L16/**"
+    systeme: "EPSG:3949"
+    justification: *cc49_lignes
+  - motif: "L17/**"
+    systeme: "EPSG:3949"
+    justification: *cc49_lignes
 
 # Saisie manuelle (dernier recours, ou prioritaire avec « forcer: true ») : point d'insertion de l'origine du site
 # IFC, rotation (degrés, sens trigonométrique, axe X de la maquette par rapport à l'Est), altitude NGF de l'origine.

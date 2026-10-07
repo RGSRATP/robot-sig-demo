@@ -88,6 +88,8 @@ def charger_config(chemin: Path = CHEMIN_GEOREF) -> dict:
     emp = ident.get("emprise_plausible_wgs84")
     if emp is not None and not (isinstance(emp, list) and len(emp) == 4 and all(_nombre(abs(v)) for v in emp)):
         raise erreur("« identification.emprise_plausible_wgs84 » : [ouest, sud, est, nord] attendu")
+    if ident.get("ecart_max_geometrie_m") is not None and not _nombre(ident["ecart_max_geometrie_m"], True):
+        raise erreur("« identification.ecart_max_geometrie_m » : nombre positif attendu")
     alti = cfg.get("altimetrie")
     if alti is not None and (not isinstance(alti.get("url"), str) or not _nombre(alti.get("ecart_max_terrain_m"), True)):
         raise erreur("section « altimetrie » incomplète (url, ressource, ecart_max_terrain_m)")
@@ -496,8 +498,13 @@ def positionner(cfg: dict, cfgm: dict, id_: str, rel: str, res: dict, donnees_lo
     declare, motif = _systeme_declare(cfgm, rel)
     saisie = _saisie(cfgm, rel)
     manuel = saisie if saisie and "x" in saisie else None
+    centre = None
+    if res["geometrie"].get("emprise_locale"):
+        x1, y1, x2, y2 = _emprise(res["geometrie"]["emprise_locale"])
+        centre = ((x1 + x2) / 2, (y1 + y2) / 2)
     pos = georef.resoudre(res["georef_brut"], ident["systemes_candidats"], ident["tolerance_m"], declare,
-                          ident.get("emprise_plausible_wgs84"), manuel)
+                          ident.get("emprise_plausible_wgs84"), manuel, centre_geometrie=centre,
+                          ecart_max_geometrie_m=ident.get("ecart_max_geometrie_m"))
     if motif and pos.get("systeme_source", "").startswith("déclaré"):
         pos["systeme_source"] = f"déclaré (configuration, motif « {motif} »)"
     geo = dict(res["geometrie"])

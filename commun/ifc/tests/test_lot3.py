@@ -227,3 +227,42 @@ def test_proprietes_index_et_fiche(jeu, tmp_path):
     assert fiche["psets"]["Données d'identification"]["SGP_DI_Sous_Ouvrage"] in ("SO-01", "SO-02")
     assert proprietes.lire_fiche(tmp_path / "p.sqlite", "inconnu") is None
     (tmp_path / "p.sqlite").unlink()   # fichier fermé : supprimable (Windows)
+
+
+# ---------------------------------------------------------------- site à l'origine, objets en coordonnées projetées
+
+def _brut_objets_projetes(latlon=(49.0, 2.0)):
+    """Cas réel (tunnel L15 1011I) : IfcSite à l'origine, RefLatitude/RefLongitude « rondes », objets en CC49."""
+    lat, lon = latlon
+    return {"schema": "IFC2X3", "nb_sites": 1, "nord_geographique": [0.0, 1.0], "map_conversion": None,
+            "site": {"origine": [0.0, 0.0, 0.0], "axe_x": [1.0, 0.0], "latitude": lat, "longitude": lon, "altitude": 0.0}}
+
+
+def test_objets_projetes_latlon_seules_refusees():
+    pos = georef.resoudre(_brut_objets_projetes(), ["EPSG:2154"], 2000, emprise_plausible_wgs84=EMPRISE_IDF,
+                          centre_geometrie=(1663283.0, 8179781.0), ecart_max_geometrie_m=20000)
+    assert pos["statut"] == "non_positionnee" and "km de l'origine du site" in pos["raison"]
+
+
+def test_objets_projetes_systeme_a_declarer_puis_declare():
+    params = dict(systemes_candidats=CANDIDATS, tolerance_m=2000, emprise_plausible_wgs84=EMPRISE_IDF,
+                  centre_geometrie=(1663283.0, 8179781.0), ecart_max_geometrie_m=20000)
+    pos = georef.resoudre(_brut_objets_projetes(), **params)
+    assert pos["statut"] == "non_positionnee" and "EPSG:3949" in pos["raison"]
+    pos = georef.resoudre(_brut_objets_projetes(), systeme_declare="EPSG:3949", **params)
+    assert pos["statut"] == "positionnee" and pos["methode"] == "ifc_site_projete" and pos["systeme"] == "EPSG:3949"
+    # repère du site : coordonnées projetées = coordonnées monde des objets
+    assert georef.vers_projete(pos["repere"], 1663283.0, 8179781.0)[:2] == pytest.approx((1663283.0, 8179781.0))
+    assert any("objets en coordonnées projetées" in a for a in pos["avertissements"])
+
+
+def test_objets_projetes_systeme_identifie_par_latlon():
+    lon, lat = Transformer.from_crs(3949, 4326, always_xy=True).transform(1663283.0, 8179781.0)
+    pos = georef.resoudre(_brut_objets_projetes((lat, lon)), CANDIDATS, 2000, emprise_plausible_wgs84=EMPRISE_IDF,
+                          centre_geometrie=(1663283.0, 8179781.0), ecart_max_geometrie_m=20000)
+    assert pos["statut"] == "positionnee" and pos["systeme"] == "EPSG:3949"
+
+
+def test_geometrie_proche_du_site_latlon_toujours_acceptees(jeu):
+    pos = resoudre(jeu, "methode2b_latlon.ifc", centre_geometrie=(3.0, 2.0), ecart_max_geometrie_m=20000)
+    assert pos["methode"] == "ifc_site_latlon"
