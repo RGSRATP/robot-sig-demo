@@ -406,7 +406,7 @@ export class GestionnaireMaquettes {
       this.carte.setFeatureState({ source: 'sig-maquettes', id: this.ficheOuverte }, { choisie: false });
     }
     this.ficheOuverte = id;
-    if (m.positionnement?.statut === 'positionnee') {
+    if (this.maquettes.get(id).positionnement?.statut === 'positionnee') {
       this.carte.setFeatureState({ source: 'sig-maquettes', id }, { choisie: true });
     }
     if (zoomer) this.zoomer(id);

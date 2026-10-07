@@ -38,6 +38,19 @@ export function cadrer(carte, { centre, hauteur = 0, taille = 10 }, { pitch, dur
   requestAnimationFrame(pas);
 }
 
+/** Amène le centre de la vue à `hauteur` mètres (plancher d'un niveau), sans déplacer ni zoomer. */
+export function hauteurVue(carte, hauteur, duree = 500) {
+  const depart = carte.getCenterElevation();
+  if (Math.abs(depart - hauteur) < 0.01) return;
+  const debut = performance.now();
+  const pas = (maintenant) => {
+    const t = Math.min(1, (maintenant - debut) / duree);
+    carte.setCenterElevation(depart + (hauteur - depart) * t * (2 - t));
+    if (t < 1) requestAnimationFrame(pas);
+  };
+  requestAnimationFrame(pas);
+}
+
 /** Ramène le centre de la vue au niveau du sol (avant un cadrage sur une emprise au sol). */
 export function auSol(carte) {
   if (carte.getCenterElevation() !== 0) carte.setCenterElevation(0);

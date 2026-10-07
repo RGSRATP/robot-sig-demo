@@ -352,3 +352,11 @@ p.sig-etiquette { margin: 0 0 6px; }
 .sig-croisement__liste li { padding: 3px 0; border-bottom: 1px solid var(--sig-trait-2); }
 .sig-croisement__liste li:last-child { border-bottom: 0; }
 a.sig-bouton { text-decoration: none; display: inline-block; }
+
+/* Étiquettes des locaux du plan : HTML ancré dans la 3D à l'altitude du plancher (vue3d.js) */
+.sig-etiquettes-3d { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
+.sig-etiquette-3d {
+  position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 11px; line-height: 14px; font-weight: 600;
+  color: #1b1f23; padding: 0 3px; border-radius: 3px; background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 0 0 1px rgba(43, 49, 55, 0.18); will-change: transform;
+}

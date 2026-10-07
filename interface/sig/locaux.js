@@ -1,7 +1,7 @@
 // Plan des locaux d'une maquette : niveau par niveau, emprises des IfcSpace colorées par typologie et posées
 // à l'altitude de leur plancher dans la 3D, coupe au-dessus du niveau, liste filtrable, fiche d'un local.
 // Données : /api/sig/maquettes/{id}/locaux.
-import { cadrer } from './camera.js';
+import { cadrer, hauteurVue } from './camera.js';
 import { lire } from './api.js';
 import { afficherLocal } from './fiche.js';
 import { bouton, el } from './ui.js';
@@ -61,11 +61,8 @@ export class GestionnaireLocaux {
     const parDefaut = d.niveaux.find((n) => n.hauteurs && n.hauteurs[0] <= 0 && n.hauteurs[1] > 0) || d.niveaux[0];
     this.niveau = cible ? this._niveauDe(cible) : parDefaut?.niveau;
     this._appliquer();
-    if (d.positionnee) {
-      const [x1, y1, x2, y2] = m.positionnement.emprise_wgs84;
-      this.carte.fitBounds([[x1, y1], [x2, y2]], { padding: 60, pitch: 0, bearing: this.carte.getBearing(), maxZoom: 20 });
-    }
     if (cible) this.selectionner(cible.guid, true);
+    else this._cadrerNiveau(0);
   }
 
   _niveauDe(l) {
@@ -92,35 +89,31 @@ export class GestionnaireLocaux {
       const coupe = n?.hauteurs ? Math.min(n.hauteurs[0] + this.hauteurCoupe, n.hauteurs[1]) : null;
       this.c3d.definirCoupe(this.couper ? coupe : null);
       this.c3d.attenuer(this.attenuer ? OPACITE_ATTENUEE : 1);
-      this._etiquettes(locaux);
     }
     if (this.selection && !locaux.some((l) => l.guid === this.selection)) this.selection = null;
     this.c3d.montrerVolume(this.selection);
     this._rendre();
   }
 
-  _etiquettes(locaux) {
-    const donnees = { type: 'FeatureCollection', features: locaux.filter((l) => l.centre_wgs84).map((l) => ({
-      type: 'Feature', geometry: { type: 'Point', coordinates: l.centre_wgs84 },
-      properties: { texte: l.code || l.nom || '' } })) };
-    const source = this.carte.getSource('sig-locaux-etiquettes');
-    if (source) { source.setData(donnees); return; }
-    if (!this.police || !this.carte.getStyle().glyphs) return;
-    this.carte.addSource('sig-locaux-etiquettes', { type: 'geojson', data: donnees });
-    this.carte.addLayer({ id: 'sig-locaux-etiquettes', type: 'symbol', source: 'sig-locaux-etiquettes', minzoom: 18,
-      layout: { 'text-field': ['get', 'texte'], 'text-font': [this.police], 'text-size': 11, 'text-max-width': 8,
-                'text-allow-overlap': false },
-      paint: { 'text-color': '#1b1f23', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.4 } });
-    // Les étiquettes sont posées au sol : elles ne sont lisibles qu'en vue de dessus.
-    const maj = () => this.carte.getLayer('sig-locaux-etiquettes')
-      && this.carte.setLayoutProperty('sig-locaux-etiquettes', 'visibility', this.carte.getPitch() < 15 ? 'visible' : 'none');
-    this.carte.on('pitch', maj);
-    maj();
-  }
-
   choisirNiveau(nom) {
     this.niveau = nom;
     this._appliquer();
+    this._cadrerNiveau();
+  }
+
+  /** Vue cadrée sur les locaux du niveau, centre de la vue à la hauteur de son plancher : zoom et rotation
+   *  autour du niveau affiché (sous-sol ou étage). */
+  _cadrerNiveau(pitch) {
+    let b = null;
+    for (const l of this._locauxDuNiveau()) {
+      const e = l.emprise_wgs84;
+      if (e) b = b ? [Math.min(b[0], e[0]), Math.min(b[1], e[1]), Math.max(b[2], e[2]), Math.max(b[3], e[3])] : [...e];
+    }
+    const n = this._infoNiveau();
+    if (!b || !this.donnees?.positionnee) return;
+    const taille = Math.max((b[2] - b[0]) * 111320 * Math.cos((b[1] * Math.PI) / 180), (b[3] - b[1]) * 110540) / 2;
+    cadrer(this.carte, { centre: [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2], hauteur: n?.hauteurs ? n.hauteurs[0] : 0, taille },
+      { pitch: pitch ?? this.carte.getPitch() });
   }
 
   selectionner(guid, zoomer = false) {
@@ -150,10 +143,10 @@ export class GestionnaireLocaux {
   }
 
   fermer() {
+    hauteurVue(this.carte, 0);
     this.c3d.attenuer(1);
     this.c3d.retirerPlan();
     this.c3d.definirCoupe(null);
-    if (this.carte.getSource('sig-locaux-etiquettes')) this.carte.getSource('sig-locaux-etiquettes').setData({ type: 'FeatureCollection', features: [] });
     this.maquette = null;
     this.donnees = null;
     this.selection = null;

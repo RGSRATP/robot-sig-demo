@@ -18,6 +18,28 @@ import { MercatorCoordinate } from 'maplibre-gl';
 
 const COULEUR_SELECTION = 0xe8b400;
 const COULEUR_CONTOUR_PLAN = 0x2b3137;
+const ZOOM_ETIQUETTES = 17;        // étiquettes des locaux à partir de ce zoom
+const ETIQUETTE_HAUTEUR_PX = 16;   // encombrement d'une étiquette (évitement des chevauchements)
+const ETIQUETTE_CHASSE_PX = 6.6;   // largeur moyenne d'un caractère
+
+/** Point d'ancrage d'une étiquette : barycentre du plus grand polygone de l'emprise (repère local). */
+function ancrage(geojson) {
+  const polys = geojson.type === 'Polygon' ? [geojson.coordinates] : geojson.coordinates;
+  let meilleur = null;
+  for (const anneaux of polys) {
+    const a = anneaux[0];
+    let aire = 0; let cx = 0; let cy = 0;
+    for (let i = 0, j = a.length - 1; i < a.length; j = i, i += 1) {
+      const f = a[j][0] * a[i][1] - a[i][0] * a[j][1];
+      aire += f; cx += (a[j][0] + a[i][0]) * f; cy += (a[j][1] + a[i][1]) * f;
+    }
+    if (Math.abs(aire) < 1e-9) continue;
+    if (!meilleur || Math.abs(aire) > meilleur.aire) meilleur = { aire: Math.abs(aire), x: cx / (3 * aire), y: cy / (3 * aire) };
+  }
+  if (meilleur) return meilleur;
+  const p = polys[0]?.[0]?.[0];
+  return p ? { aire: 0, x: p[0], y: p[1] } : null;
+}
 
 /** Indice d'objet du triangle `face` d'après les plages [premier triangle, objet, …] (recherche dichotomique). */
 function objetDuTriangle(plages, face) {
@@ -90,6 +112,57 @@ export class CoucheMaquettes3D {
     }
     this.renderer.resetState();
     this.renderer.render(this.scene, this.camera);
+    this._placerEtiquettes();
+  }
+
+  // ---------------------------------------------------------------- étiquettes des locaux
+
+  /** Étiquettes HTML posées sur la carte, ancrées dans la 3D à l'altitude du plancher de leur local :
+   *  lisibles quelle que soit l'inclinaison, à la bonne hauteur pour les sous-sols et les étages. */
+  _calqueEtiquettes() {
+    if (!this.etiquettes) {
+      this.etiquettes = { div: document.createElement('div'), liste: [] };
+      this.etiquettes.div.className = 'sig-etiquettes-3d';
+      this.carte.getCanvasContainer().append(this.etiquettes.div);
+    }
+    return this.etiquettes;
+  }
+
+  _placerEtiquettes() {
+    const e = this.etiquettes;
+    if (!e?.liste.length) return;
+    const visible = this.carte.getZoom() >= ZOOM_ETIQUETTES;
+    e.div.hidden = !visible;
+    if (!visible) return;
+    const canvas = this.carte.getCanvas();
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const v = new THREE.Vector4();
+    const prises = [];
+    for (const et of e.liste) {   // les plus grands locaux d'abord : ils gardent leur étiquette
+      v.set(et.point.x, et.point.y, et.point.z, 1).applyMatrix4(this.camera.projectionMatrix);
+      let montre = v.w > 0;
+      let x = 0; let y = 0;
+      if (montre) {
+        x = ((v.x / v.w + 1) / 2) * w;
+        y = ((1 - v.y / v.w) / 2) * h;
+        montre = x > -50 && x < w + 50 && y > -20 && y < h + 20;
+      }
+      if (montre) {
+        const lx = et.largeur / 2;
+        const ly = ETIQUETTE_HAUTEUR_PX / 2;
+        montre = !prises.some((r) => Math.abs(r.x - x) < r.lx + lx && Math.abs(r.y - y) < r.ly + ly);
+        if (montre) prises.push({ x, y, lx, ly });
+      }
+      et.el.hidden = !montre;
+      if (montre) et.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -50%)`;
+    }
+  }
+
+  _retirerEtiquettes() {
+    if (!this.etiquettes) return;
+    this.etiquettes.div.replaceChildren();
+    this.etiquettes.liste = [];
   }
 
   // ---------------------------------------------------------------- modèles
@@ -295,10 +368,32 @@ export class CoucheMaquettes3D {
     groupe.updateMatrixWorld(true);
     this.plan = { id, groupe, volume: null };
     this.scene.add(groupe);
+    // étiquettes : code du local, ancrées au plancher, les plus grands locaux d'abord
+    const calque = this._calqueEtiquettes();
+    this._retirerEtiquettes();
+    // préfixe commun aux codes du niveau (ouvrage, bâtiment, niveau : « 49MAS-B-S01- ») retiré des étiquettes
+    const codes = locaux.map((l) => l.code).filter(Boolean);
+    let prefixe = codes[0] || '';
+    for (const c of codes) while (prefixe && !c.startsWith(prefixe)) prefixe = prefixe.slice(0, -1);
+    prefixe = codes.length > 1 ? prefixe.slice(0, prefixe.lastIndexOf('-') + 1) : '';
+    for (const l of locaux) {
+      const texte = l.code ? l.code.slice(prefixe.length) || l.code : l.nom;
+      const a = texte && l.emprise_locale && l.z_min != null && ancrage(l.emprise_locale);
+      if (!a) continue;
+      const el = document.createElement('span');
+      el.className = 'sig-etiquette-3d';
+      el.textContent = texte;
+      el.title = [l.code, l.nom_long || l.nom, l.typologie].filter(Boolean).join(' · ');
+      calque.div.append(el);
+      calque.liste.push({ el, aire: a.aire, largeur: texte.length * ETIQUETTE_CHASSE_PX + 8,
+        point: new THREE.Vector3(a.x, a.y, l.z_min + 0.05).applyMatrix4(groupe.matrix) });
+    }
+    calque.liste.sort((p, q) => q.aire - p.aire);
     this.carte.triggerRepaint();
   }
 
   retirerPlan() {
+    this._retirerEtiquettes();
     if (!this.plan) return;
     this.scene.remove(this.plan.groupe);
     this.plan.groupe.traverse((o) => {
