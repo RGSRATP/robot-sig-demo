@@ -291,3 +291,26 @@ def test_api_config_maquettes_invalide_503(cfg_test, monkeypatch):
         r = c.get("/api/sig/maquettes")
     app.dependency_overrides.clear()
     assert r.status_code == 503 and "essai" in r.json()["detail"]
+
+
+def test_api_types_et_familles(client):
+    r = client.get("/api/sig/maquettes").json()
+    m = next(x for x in r["maquettes"] if x["nom"] == "methode1_map_conversion_ifc4")
+    t = client.get(f"/api/sig/maquettes/{m['id']}/types").json()
+    # deux murs : type IfcWall, famille « Génie civil » (type IFC déclaré)
+    assert [t["types"][i] for i in t["objets"]] == ["IfcWall", "IfcWall"]
+    assert [t["familles"][i]["nom"] for i in t["famille"]] == ["Génie civil", "Génie civil"]
+    assert t["familles"][0]["nb"] == 2 and t["familles"][0]["couleur"].startswith("#")
+    # deuxième appel : relu du cache
+    assert client.get(f"/api/sig/maquettes/{m['id']}/types").json() == t
+
+
+def test_familles_par_domaine_puis_type_puis_fichier(cfgm):
+    cfgm = copy.deepcopy(cfgm)
+    cfgm["familles_objets"] = [{"nom": "Lot", "fichiers": ["methode1*"]}, {"nom": "Rien", "types_ifc": ["IfcDoor"]}]
+    m = next(x for x in maq.fichiers(cfgm) if x[1] == "methode1_map_conversion_ifc4.ifc")
+    t = maq.types_objets(cfgm, *m)
+    assert [t["familles"][i]["nom"] for i in t["famille"]] == ["Lot", "Lot"]
+    cfgm["familles_objets"] = [{"nom": "Lot", "fichiers": ["methode1*"]}, {"nom": "Structure", "types_ifc": ["IfcWall"]}]
+    t = maq.types_objets(cfgm, *m)
+    assert [t["familles"][i]["nom"] for i in t["famille"]] == ["Structure", "Structure"]

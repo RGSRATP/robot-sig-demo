@@ -47,3 +47,29 @@ maquettes:
     altitude: 90.0
     rotation_deg: 30
     decalage_vertical_m: 1.5
+
+# Familles d'objets (filtres de la vue 3D : afficher, masquer, colorer, isoler). Un objet appartient à la première
+# famille dont le domaine SGP (Pset SGP_DI_Domaine) correspond ; sinon à la première dont le type IFC correspond ;
+# sinon à la première dont le fichier correspond (motif relatif à dossier_ifc : lots de génie civil, par exemple).
+# Les propriétés SGP_DI_Domaine sont absentes de 90 % des objets constatés : le type IFC est le critère principal.
+familles_objets:
+  - nom: "Génie civil"
+    couleur: "#d9822b"
+    domaines_sgp: ["INF", "SOS"]
+    types_ifc: ["IfcWall", "IfcWallStandardCase", "IfcSlab", "IfcBeam", "IfcColumn", "IfcFooting", "IfcPile",
+                "IfcRamp", "IfcRampFlight", "IfcStair", "IfcStairFlight", "IfcRoof", "IfcCivilElement",
+                "IfcReinforcingBar", "IfcReinforcingMesh", "IfcTendon"]
+    fichiers: ["*IGC*", "*Genie_Civil*", "*Genie Civil*", "*Génie*Civil*", "*_GC_*"]
+  - nom: "Réseaux et équipements"
+    couleur: "#2a9d8f"
+    domaines_sgp: ["SYS"]
+    types_ifc: ["IfcFlowSegment", "IfcFlowFitting", "IfcFlowTerminal", "IfcFlowController", "IfcFlowMovingDevice",
+                "IfcFlowStorageDevice", "IfcFlowTreatmentDevice", "IfcEnergyConversionDevice",
+                "IfcDistributionElement", "IfcDistributionControlElement", "IfcDistributionFlowElement",
+                "IfcTransportElement", "IfcCableCarrierSegment", "IfcCableCarrierFitting", "IfcCableSegment",
+                "IfcPipeSegment", "IfcPipeFitting", "IfcDuctSegment", "IfcDuctFitting"]
+  - nom: "Second œuvre"
+    couleur: "#8d6cab"
+    domaines_sgp: ["INT", "MOB_Mobiliers"]
+    types_ifc: ["IfcDoor", "IfcWindow", "IfcCovering", "IfcRailing", "IfcCurtainWall", "IfcFurnishingElement",
+                "IfcFurniture"]

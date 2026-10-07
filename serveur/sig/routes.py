@@ -258,6 +258,14 @@ def _glb(chemin: Path) -> FileResponse:
     return FileResponse(chemin, media_type="model/gltf-binary")
 
 
+@routeur.get("/maquettes/{id_maquette}/types")
+def maquette_types(id_maquette: str, cfgm: dict = Depends(_config_maquettes)):
+    """Type IFC et famille (génie civil, réseaux…) de chaque objet du modèle 3D, dans l'ordre de sa table d'objets :
+    filtres de la vue 3D (masquer, colorer, isoler)."""
+    rel, chemin = _maquette_traitee(id_maquette, cfgm)
+    return _json(maq_sig.types_objets(cfgm, id_maquette, rel, chemin))
+
+
 @routeur.get("/maquettes/{id_maquette}/objets/{guid}")
 def maquette_objet(id_maquette: str, guid: str, cfgm: dict = Depends(_config_maquettes)):
     rel, _ = _maquette_traitee(id_maquette, cfgm)

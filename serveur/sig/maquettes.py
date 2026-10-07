@@ -86,6 +86,10 @@ def charger_config(chemin: Path = CHEMIN_GEOREF) -> dict:
         raise erreur("« affichage_3d » : zoom_emprises et max_emprises (nombres positifs) attendus")
     if not _nombre((cfg.get("inventaire") or {}).get("balayage_secondes")):
         raise erreur("« inventaire.balayage_secondes » : nombre positif attendu")
+    for i, f in enumerate(cfg.get("familles_objets") or [], 1):
+        if not isinstance(f, dict) or not isinstance(f.get("nom"), str) or not all(
+                isinstance(f.get(k, []), list) for k in ("types_ifc", "fichiers", "domaines_sgp")):
+            raise erreur(f"« familles_objets » n° {i} : « nom » et listes types_ifc / fichiers / domaines_sgp attendus")
     ident = cfg.get("identification") or {}
     if not isinstance(ident.get("systemes_candidats"), list) or not _nombre(ident.get("tolerance_m"), True):
         raise erreur("section « identification » incomplète (systemes_candidats, tolerance_m)")
@@ -810,7 +814,7 @@ class SuiviInventaire:
         try:   # un seul parcours du dossier de cache (sous Windows, les dates viennent avec la liste)
             with os.scandir(dossier_cache(cfgm, id_)) as it:
                 cache = tuple(sorted((e.name, e.stat().st_mtime_ns) for e in it
-                                     if e.name.endswith(".json") and e.name != LIGNE))
+                                     if e.name.endswith(".json") and e.name not in (LIGNE, "types.json")))
         except OSError:
             cache = ()
         return st.st_size, st.st_mtime_ns, cache
@@ -976,3 +980,74 @@ def chemin_maquette(cfgm: dict, id_: str) -> tuple[str, Path] | None:
         if i == id_:
             return rel, chemin
     return None
+
+
+# ---------------------------------------------------------------- types et familles des objets (filtres 3D)
+
+VERSION_TYPES = "1"
+
+
+def _domaine_sgp(fiche_json: str | None) -> str | None:
+    try:
+        psets = json.loads(fiche_json or "{}").get("psets") or {}
+    except ValueError:
+        return None
+    for valeurs in psets.values():
+        if isinstance(valeurs, dict) and valeurs.get("SGP_DI_Domaine"):
+            return str(valeurs["SGP_DI_Domaine"])
+    return None
+
+
+def types_objets(cfgm: dict, id_: str, rel: str, chemin: Path) -> dict:
+    """Type IFC et famille de chaque objet du modèle 3D, dans l'ordre de sa table d'objets (geometrie.json,
+    commune au modèle et aux petits éléments) : {"types": [...], "objets": [indice de type...],
+    "familles": [{"nom", "couleur", "nb"}...], "famille": [indice de famille ou -1...]}.
+
+    Famille : domaine SGP d'abord (Pset SGP_DI_Domaine), puis type IFC, puis motif du fichier. Mis en cache
+    (types.json) tant que la maquette et la déclaration des familles ne changent pas.
+    """
+    import sqlite3
+
+    dossier = dossier_cache(cfgm, id_)
+    familles = cfgm.get("familles_objets") or []
+    cle = hashlib.sha1(json.dumps([cle_traitement(chemin, cfgm), familles, VERSION_TYPES], sort_keys=True)
+                       .encode("utf-8")).hexdigest()
+    enr = _lire_json(dossier / "types.json")
+    if enr and enr.get("cle") == cle:
+        return enr["donnees"]
+    geo = _lire_json(dossier / "geometrie.json") or {}
+    guids = geo.get("guids") or []
+    avec_domaines = any(f.get("domaines_sgp") for f in familles)
+    infos: dict[str, tuple[str, str | None]] = {}
+    base = dossier / "proprietes.sqlite"
+    if base.is_file():
+        con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+        try:
+            requete = "SELECT guid, type_ifc, fiche FROM objets" if avec_domaines else "SELECT guid, type_ifc, NULL FROM objets"
+            for guid, type_ifc, fiche in con.execute(requete):
+                infos[guid] = (type_ifc or "?", _domaine_sgp(fiche) if fiche else None)
+        finally:
+            con.close()
+    par_fichier = next((i for i, f in enumerate(familles)
+                        if any(fnmatch.fnmatch(rel.lower(), m.lower()) for m in f.get("fichiers") or [])), -1)
+    par_type = {t: i for i, f in reversed(list(enumerate(familles))) for t in f.get("types_ifc") or []}
+    par_domaine = {d: i for i, f in reversed(list(enumerate(familles))) for d in f.get("domaines_sgp") or []}
+    types: dict[str, int] = {}
+    objets, famille = [], []
+    for g in guids:
+        type_ifc, domaine = infos.get(g, ("?", None))
+        objets.append(types.setdefault(type_ifc, len(types)))
+        famille.append(par_domaine.get(domaine, par_type.get(type_ifc, par_fichier)))
+    donnees = {
+        "types": list(types),
+        "objets": objets,
+        "familles": [{"nom": f["nom"], "couleur": f.get("couleur", "#888888"), "nb": famille.count(i)}
+                     for i, f in enumerate(familles)],
+        "famille": famille,
+    }
+    try:
+        (dossier / "types.json").write_text(json.dumps({"cle": cle, "donnees": donnees}, separators=(",", ":")),
+                                            encoding="utf-8")
+    except OSError:
+        pass
+    return donnees

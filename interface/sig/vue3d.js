@@ -74,6 +74,11 @@ export class CoucheMaquettes3D {
     this.matVolume = new THREE.MeshBasicMaterial({ color: COULEUR_SELECTION, transparent: true, opacity: 0.38,
       depthWrite: false, side: THREE.DoubleSide });
     this.matVolumeArete = new THREE.LineBasicMaterial({ color: 0x8a6a00 });
+    // Filtres d'objets (types IFC, familles : génie civil…), communs à toutes les maquettes affichées
+    this.types = new Map();     // id -> { types, objets, familles, famille } (serveur : /maquettes/{id}/types)
+    this.filtres = { typesMasques: new Set(), famillesMasquees: new Set(), famillesColorees: new Set(), isolee: null };
+    this.matsFamilles = new Map();
+    this.surTypes = () => {};
   }
 
   onAdd(carte, gl) {
@@ -228,6 +233,7 @@ export class CoucheMaquettes3D {
       if (this.modeles.get(id) !== entree) return groupe;   // retiré pendant le chargement
       this.scene.add(groupe);
       this._appliquer(id);
+      this._filtrer(id);
       return groupe;
     }, (err) => {
       if (this.modeles.get(id) === entree) this.modeles.delete(id);
@@ -251,6 +257,7 @@ export class CoucheMaquettes3D {
         m.groupe.add(scene);
         m.groupe.updateMatrixWorld(true);
         m.detail = scene;
+        this._filtrer(id);
       } catch (e) {
         m.detail = null;
         return;
@@ -271,11 +278,138 @@ export class CoucheMaquettes3D {
       m.groupe.traverse((o) => {
         if (o.isMesh) {
           o.geometry.dispose();
-          for (const mat of [o.material].flat()) mat.dispose();
+          for (const mat of [o.material].flat()) if (!mat.userData.famille) mat.dispose();
         }
       });
     }
     this.modeles.delete(id);
+    if (this.types.delete(id)) this.surTypes();
+    this.carte?.triggerRepaint();
+  }
+
+  // ---------------------------------------------------------------- filtres d'objets
+
+  /** Types IFC et familles des objets d'une maquette chargée (indices alignés sur sa table d'objets). */
+  definirTypes(id, donnees) {
+    if (!this.modeles.has(id)) return;
+    this.types.set(id, donnees);
+    this._filtrer(id);
+    this.surTypes();
+  }
+
+  /** Filtres : { typesMasques: Set(type IFC), famillesMasquees: Set(indice, -1 = autres),
+   *  famillesColorees: Set(indice), isolee: indice de famille ou null }. */
+  definirFiltres(filtres) {
+    this.filtres = { ...this.filtres, ...filtres };
+    for (const id of this.modeles.keys()) this._filtrer(id);
+  }
+
+  /** Récapitulatif des maquettes chargées : familles (nom, couleur, nombre d'objets) et types IFC (nombre). */
+  recapitulatif() {
+    const familles = [];
+    const types = new Map();
+    let autres = 0;
+    for (const t of this.types.values()) {
+      t.familles.forEach((f, i) => {
+        if (!familles[i]) familles[i] = { nom: f.nom, couleur: f.couleur, nb: 0 };
+        familles[i].nb += f.nb;
+      });
+      for (const f of t.famille) if (f < 0) autres += 1;
+      for (const k of t.objets) types.set(t.types[k], (types.get(t.types[k]) || 0) + 1);
+    }
+    return { familles, autres, types: [...types.entries()].sort((a, b) => b[1] - a[1]) };
+  }
+
+  _matFamille(couleur) {
+    if (!this.matsFamilles.has(couleur)) {
+      this.matsFamilles.set(couleur, new THREE.MeshStandardMaterial({
+        color: couleur, roughness: 0.8, metalness: 0, side: THREE.DoubleSide, flatShading: true,
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+      this.matsFamilles.get(couleur).userData.famille = true;   // partagé entre maquettes
+    }
+    return this.matsFamilles.get(couleur);
+  }
+
+  /** Objets masqués (1) d'une maquette d'après les filtres, ou null si tout est visible. */
+  _masques(t) {
+    const f = this.filtres;
+    if (!t || (!f.typesMasques.size && !f.famillesMasquees.size && f.isolee == null)) return null;
+    const masque = new Uint8Array(t.objets.length);
+    let n = 0;
+    for (let i = 0; i < masque.length; i += 1) {
+      const fam = t.famille[i];
+      if (f.typesMasques.has(t.types[t.objets[i]]) || f.famillesMasquees.has(fam) || (f.isolee != null && fam !== f.isolee)) {
+        masque[i] = 1;
+        n += 1;
+      }
+    }
+    return n ? masque : null;
+  }
+
+  /** Applique les filtres à une maquette. Objets masqués : triangles retirés d'un index filtré (alloué une fois
+   *  par maillage, réutilisé avec une plage de dessin : pas de nouveau tampon graphique à chaque changement) ;
+   *  l'index d'origine reste pour la sélection et le retour sans filtre. Familles colorées : redessinées par-dessus
+   *  dans leur couleur (surcouches partageant les sommets du maillage). */
+  _filtrer(id) {
+    const m = this.modeles.get(id);
+    if (!m?.groupe) return;
+    const t = this.types.get(id);
+    const masque = this._masques(t);
+    const colorees = t && this.filtres.famillesColorees.size ? this.filtres.famillesColorees : null;
+    m.groupe.traverse((o) => {
+      const g = o.isMesh && o.geometry;
+      const plages = g?.userData.plages;
+      if (!plages) return;
+      const origine = g.userData.indexOrigine || (g.userData.indexOrigine = g.index);
+      const index = origine.array;
+      const nbTri = index.length / 3;
+      const remplir = (cible, garder) => {   // copie dans cible les triangles des objets gardés ; plages visibles
+        const visibles = [];
+        let n = 0;
+        for (let i = 0; i < plages.length; i += 2) {
+          if (!garder(plages[i + 1])) continue;
+          const fin = i + 2 < plages.length ? plages[i + 2] : nbTri;
+          visibles.push(n, plages[i + 1]);
+          cible.array.set(index.subarray(plages[i] * 3, fin * 3), n * 3);
+          n += fin - plages[i];
+        }
+        cible.needsUpdate = true;
+        return { n, visibles };
+      };
+      if (masque) {
+        if (!g.userData.indexFiltre) {
+          g.userData.indexFiltre = new THREE.BufferAttribute(new (index.constructor)(index.length), 1)
+            .setUsage(THREE.DynamicDrawUsage);
+        }
+        const { n, visibles } = remplir(g.userData.indexFiltre, (objet) => !masque[objet]);
+        if (g.index !== g.userData.indexFiltre) g.setIndex(g.userData.indexFiltre);
+        g.setDrawRange(0, n * 3);
+        g.userData.plagesVisibles = visibles;   // le clic retrouve l'objet dans l'index filtré
+      } else if (g.index !== origine) {
+        g.setIndex(origine);
+        g.setDrawRange(0, Infinity);
+        g.userData.plagesVisibles = null;
+      }
+      o.userData.surcouches ||= new Map();   // famille -> maillage
+      for (const [fam, s] of o.userData.surcouches) s.visible = Boolean(colorees?.has(fam));
+      if (!colorees) return;
+      for (const fam of colorees) {
+        let s = o.userData.surcouches.get(fam);
+        if (!s) {
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', g.getAttribute('position'));   // partagé avec le maillage
+          geo.setIndex(new THREE.BufferAttribute(new (index.constructor)(index.length), 1).setUsage(THREE.DynamicDrawUsage));
+          s = new THREE.Mesh(geo, this._matFamille(t.familles[fam]?.couleur || '#888888'));
+          s.renderOrder = 1;
+          o.add(s);
+          s.updateMatrixWorld(true);
+          o.userData.surcouches.set(fam, s);
+        }
+        const { n } = remplir(s.geometry.index, (objet) => t.famille[objet] === fam && !(masque && masque[objet]));
+        s.geometry.setDrawRange(0, n * 3);
+        s.visible = n > 0;
+      }
+    });
     this.carte?.triggerRepaint();
   }
 
@@ -311,7 +445,7 @@ export class CoucheMaquettes3D {
     m.groupe.traverse((o) => {
       if (!o.isMesh) return;
       for (const mat of [o.material].flat()) {
-        if (mat === this.matSelection) continue;
+        if (mat === this.matSelection || mat.userData.famille) continue;
         const base = mat.userData.opaciteOrigine ?? 1;
         mat.opacity = base * op;
         mat.transparent = mat.userData.transparentOrigine || op < 1;
@@ -462,8 +596,9 @@ export class CoucheMaquettes3D {
       .filter(([k, m]) => m.groupe && m.visible && (!this.isole || this.isole === k)).map(([, m]) => m.groupe);
     for (const hit of rayon.intersectObjects(cibles, true)) {
       if (this.coupe != null && hit.point.z > this.coupe) continue;
-      const plages = hit.object.geometry.userData.plages;
-      if (!plages || hit.faceIndex == null) continue;   // surbrillance (sans plages) ou objet étranger
+      const ud = hit.object.geometry.userData;
+      const plages = ud.plagesVisibles || ud.plages;
+      if (!plages || hit.faceIndex == null) continue;   // surbrillance, surcouche (sans plages) ou objet étranger
       let scene = hit.object;
       while (scene && !scene.userData.guids) scene = scene.parent;
       let racine = scene;
@@ -488,7 +623,7 @@ export class CoucheMaquettes3D {
       scene.traverse((o) => {
         const plages = o.isMesh && o.geometry.userData.plages;
         if (!plages) return;
-        const index = o.geometry.index.array;
+        const index = (o.geometry.userData.indexOrigine || o.geometry.index).array;
         const morceaux = [];
         for (let i = 0; i < plages.length; i += 2) {
           if (plages[i + 1] !== objet) continue;

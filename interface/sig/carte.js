@@ -11,6 +11,7 @@ import { fermerFiche, monterFiche } from './fiche.js';
 import { versLambert93 } from './lambert93.js';
 import { GestionnaireLocaux } from './locaux.js';
 import { GestionnaireMaquettes } from './maquettes.js';
+import { sectionFiltres } from './filtres.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
 
@@ -103,6 +104,8 @@ function voletVue3d(conteneur, carte, c3d, maquettes, appliquerTransparence) {
     el('section', { className: 'sig-section' }, el('h3', { textContent: 'Coupe horizontale' }),
       ligne('Couper au-dessus de', coupeActive, coupe, valC),
       el('p', { className: 'sig-info', textContent: 'Hauteur par rapport au terrain naturel (RGE ALTI). Les objets au-dessus sont masqués.' })),
+
+    sectionFiltres(c3d),
   );
   return { majBornes };
 }

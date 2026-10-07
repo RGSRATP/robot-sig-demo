@@ -307,6 +307,8 @@ export class GestionnaireMaquettes {
       this.progression.delete(id);
       this.c3d.definir(id, { visible: true });
       this._details();
+      // types IFC et familles des objets : filtres de la vue 3D
+      lire(`maquettes/${id}/types`).then((t) => this.c3d.definirTypes(id, t)).catch(() => {});
     } catch (e) {
       this.affichees.delete(id);
       this.automatiques.delete(id);
