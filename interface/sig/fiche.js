@@ -190,7 +190,7 @@ function tailleModele(a) {
 
 // ---------------------------------------------------------------- objet de maquette
 
-export function afficherObjetIfc(fiche, maquette, fermeture) {
+export function afficherObjetIfc(fiche, maquette, fermeture, { zoomer } = {}) {
   if (!panneau) return;
   if (fiche.erreur) {
     montrer([entete('Objet indisponible', maquette?.nom, 'Objet IFC'), el('p', { className: 'sig-erreur', textContent: fiche.erreur })], fermeture);
@@ -200,6 +200,12 @@ export function afficherObjetIfc(fiche, maquette, fermeture) {
     entete(fiche.nom || fiche.type_ifc, maquette?.nom, fiche.type_ifc),
     liste([['Type', fiche.type_objet], ['Étage', fiche.etage], ['Description', fiche.description], ['GlobalId', fiche.guid]]),
   ];
+  if (zoomer) {
+    const b = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Zoomer sur l\'objet',
+      title: 'Centre la vue sur l\'objet, à sa hauteur (sous-sol ou étage) : la rotation tourne autour de lui. Double-clic : idem.' });
+    b.addEventListener('click', zoomer);
+    noeuds.push(el('div', { className: 'sig-fiche__actions' }, b));
+  }
   const psets = Object.entries(fiche.psets || {}).sort(([a], [b]) => a.localeCompare(b, 'fr'));
   noeuds.push(el('h4', { textContent: `Jeux de propriétés (${psets.length})` }));
   for (const [nom, valeurs] of psets) {

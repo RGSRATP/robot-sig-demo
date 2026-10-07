@@ -1,6 +1,7 @@
 // Plan des locaux d'une maquette : niveau par niveau, emprises des IfcSpace colorées par typologie et posées
 // à l'altitude de leur plancher dans la 3D, coupe au-dessus du niveau, liste filtrable, fiche d'un local.
 // Données : /api/sig/maquettes/{id}/locaux.
+import { cadrer } from './camera.js';
 import { lire } from './api.js';
 import { afficherLocal } from './fiche.js';
 import { bouton, el } from './ui.js';
@@ -130,9 +131,11 @@ export class GestionnaireLocaux {
     this.c3d.montrerVolume(guid);
     this._rendre();
     if (zoomer && l.emprise_wgs84) {
+      // cadrage à la hauteur du local (sous-sol ou étage) : la rotation tourne autour de lui
       const [x1, y1, x2, y2] = l.emprise_wgs84;
-      this.carte.fitBounds([[x1, y1], [x2, y2]], { padding: 160, maxZoom: 21, pitch: this.carte.getPitch(),
-        bearing: this.carte.getBearing() });
+      const metres = Math.max((x2 - x1) * 111320 * Math.cos((y1 * Math.PI) / 180), (y2 - y1) * 110540);
+      cadrer(this.carte, { centre: l.centre_wgs84 || [(x1 + x2) / 2, (y1 + y2) / 2],
+        hauteur: l.hauteurs ? l.hauteurs[0] : 0, taille: metres });
     }
     afficherLocal(l, this.maquette, {
       couleur: teinte(typologieDe(l)),

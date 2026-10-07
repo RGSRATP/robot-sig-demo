@@ -4,6 +4,7 @@
 // points regroupés en vue éloignée, emprises demandées pour la zone affichée (/api/sig/maquettes/emprises),
 // description complète demandée à l'ouverture d'une fiche (/api/sig/maquettes/{id}).
 import { envoyer, lire } from './api.js';
+import { auSol, cadrer } from './camera.js';
 import { afficherMaquette, afficherObjetIfc } from './fiche.js';
 import { bouton, el, icone } from './ui.js';
 
@@ -352,6 +353,7 @@ export class GestionnaireMaquettes {
   zoomer(ids) {
     const b = this._emprise([ids].flat());
     if (!b) return;
+    auSol(this.carte);
     this.carte.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 80, maxZoom: 19, pitch: Math.max(this.carte.getPitch(), 55),
       bearing: this.carte.getBearing() });
   }
@@ -444,7 +446,15 @@ export class GestionnaireMaquettes {
       fiche = { erreur: e.message };
     }
     if (this.c3d.selection?.guid !== cible.guid) return;   // autre clic entre-temps
-    afficherObjetIfc(fiche, m && { ...m, nom: m.nomCourt }, () => this.c3d.deselectionner());
+    afficherObjetIfc(fiche, m && { ...m, nom: m.nomCourt }, () => this.c3d.deselectionner(),
+      { zoomer: () => this.zoomerObjet() });
+  }
+
+  /** Cadre la vue sur l'objet sélectionné, centre de la vue à sa hauteur (sous-sols compris). */
+  zoomerObjet() {
+    const b = this.c3d.boiteSelection();
+    if (b) cadrer(this.carte, b);
+    return Boolean(b);
   }
 
   deselectionner() {

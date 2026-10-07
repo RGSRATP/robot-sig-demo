@@ -418,6 +418,27 @@ export class CoucheMaquettes3D {
     this.carte.triggerRepaint();
   }
 
+  /** Objet sélectionné : centre [lon, lat], hauteur du centre (m par rapport au terrain) et plus grande
+   *  dimension (m), d'après ses triangles. null sans sélection. */
+  boiteSelection() {
+    if (!this.selection?.ajouts.length || !this.reference) return null;
+    const boite = new THREE.Box3();
+    const v = new THREE.Vector3();
+    for (const m of this.selection.ajouts) {
+      const pos = m.geometry.getAttribute('position');
+      const index = m.geometry.index.array;
+      m.updateMatrixWorld(true);
+      for (let i = 0; i < index.length; i += 1) boite.expandByPoint(v.fromBufferAttribute(pos, index[i]).applyMatrix4(m.matrixWorld));
+    }
+    if (boite.isEmpty()) return null;
+    const c = boite.getCenter(new THREE.Vector3());
+    const t = boite.getSize(new THREE.Vector3());
+    // scène : mètres autour du point de référence (x vers l'est, y vers le sud en Mercator, z vers le haut)
+    const r = this.reference;
+    const ll = new MercatorCoordinate(r.x + c.x * this.echelleRef, r.y + c.y * this.echelleRef, 0).toLngLat();
+    return { centre: [ll.lng, ll.lat], hauteur: c.z, taille: Math.max(t.x, t.y, t.z) };
+  }
+
   deselectionner() {
     if (!this.selection) return;
     // la surbrillance partage les positions du maillage : pas de dispose() (il les retirerait aussi du GPU)

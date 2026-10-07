@@ -119,7 +119,7 @@ function controles(zone, carte, cfg) {
       bouton('moins', 'Zoom arrière', () => carte.zoomOut())),
     el('div', { className: 'sig-controles__groupe' }, boussole, b3d),
     el('div', { className: 'sig-controles__groupe' },
-      bouton('accueil', 'Vue initiale', () => carte.flyTo({ center: cfg.centre_wgs84, zoom: cfg.zoom_initial, pitch: 0, bearing: 0 }))));
+      bouton('accueil', 'Vue initiale', () => carte.flyTo({ center: cfg.centre_wgs84, zoom: cfg.zoom_initial, pitch: 0, bearing: 0, elevation: 0 }))));
   zone.append(groupe);
   const maj = () => {
     boussole.firstChild.style.transform = `rotate(${-carte.getBearing()}deg)`;
@@ -182,6 +182,7 @@ export async function monterCarte(conteneur) {
     center: cfg.centre_wgs84,
     zoom: cfg.zoom_initial,
     maxPitch: INCLINAISON_MAX,
+    centerClampedToGround: false,   // centre de la vue à la hauteur d'un objet en sous-sol ou en étage (camera.js)
     attributionControl: { compact: true },
     canvasContextAttributes: { antialias: true },
   });
@@ -294,6 +295,14 @@ export async function monterCarte(conteneur) {
     maquettes.deselectionner();
     locaux.deselectionner();
     fermerFiche();
+  });
+  // Double-clic sur un objet de maquette : vue centrée sur lui, à sa hauteur (au lieu du zoom de la carte).
+  carte.on('dblclick', (e) => {
+    const cible3d = c3d.objetSous(e.point);
+    if (!cible3d) return;
+    e.preventDefault();
+    if (c3d.selection?.guid !== cible3d.guid) maquettes.ouvrirObjet(cible3d);
+    maquettes.zoomerObjet();
   });
   carte.on('mousemove', (e) => {
     const touche = couches.objetSous(e.point) || maquettes.empriseSous(e.point)
