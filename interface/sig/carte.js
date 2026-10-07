@@ -247,7 +247,7 @@ export async function monterCarte(conteneur) {
     surSelection: () => couches.deselectionner(false),
     surEtat: ({ total, enCours, courant }) => {
       pastilleMaquettes.textContent = enCours
-        ? `Maquettes : traitement ${total - enCours + 1}/${total}${courant ? ` (${courant.etat.progression ?? 0} %)` : ''}`
+        ? `Maquettes : ${total - enCours}/${total} traitée(s)${courant ? ` (en cours ${courant.etat.progression ?? 0} %)` : ''}`
         : `Maquettes : ${total} traitée(s)`;
       pastilleMaquettes.classList.toggle('sig-pastille-etat--actif', enCours > 0);
       g.badge('maquettes', enCours, false);
@@ -262,7 +262,8 @@ export async function monterCarte(conteneur) {
   d.panneaux.get('vue3d').bouton.addEventListener('click', () => vue3d.majBornes());
 
   // Répartition des clics : local du plan affiché, objet de maquette 3D, objet SIG, emprise de maquette.
-  carte.on('click', (e) => {
+  carte.on('click', async (e) => {
+    if (await maquettes.deplierGroupe(e.point)) return;   // groupe de maquettes (vue éloignée) : zoom
     const local = c3d.localSous(e.point);
     if (local) {
       couches.deselectionner(false);
@@ -295,7 +296,8 @@ export async function monterCarte(conteneur) {
     fermerFiche();
   });
   carte.on('mousemove', (e) => {
-    const touche = couches.objetSous(e.point) || maquettes.empriseSous(e.point);
+    const touche = couches.objetSous(e.point) || maquettes.empriseSous(e.point)
+      || carte.queryRenderedFeatures(e.point, { layers: ['sig-maquettes-groupes'].filter((c) => carte.getLayer(c)) }).length;
     carte.getCanvas().style.cursor = touche ? 'pointer' : '';
   });
 

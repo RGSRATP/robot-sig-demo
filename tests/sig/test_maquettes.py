@@ -214,12 +214,51 @@ def client(cfg_test, cfgm, monkeypatch):
 
 def test_api_maquettes_et_emprises(client):
     r = client.get("/api/sig/maquettes").json()
-    assert len(r["maquettes"]) == 7
+    assert len(r["maquettes"]) == 7 and r["complet"] and r["total"] == 7
     em = client.get("/api/sig/maquettes/emprises").json()
-    assert em["type"] == "FeatureCollection" and len(em["features"]) == 4
-    # liste allégée : emprise simplifiée pour le dessin, l'exacte reste côté serveur (interrogation croisée)
+    assert em["type"] == "FeatureCollection" and len(em["features"]) == 4 and not em["tronque"]
+    # liste allégée : ni emprises ni repère ni métadonnées (des milliers de maquettes) ; rectangle et affichage 3D
     pos = [m["positionnement"] for m in r["maquettes"] if (m.get("positionnement") or {}).get("statut") == "positionnee"]
-    assert pos and all("emprise_affichage" in p and "emprise_geojson" not in p for p in pos)
+    assert pos and all(not set(p) & set(maq.CLES_LOURDES) for p in pos)
+    assert all(len(p["emprise_wgs84"]) == 4 and "origine" in p["affichage"] for p in pos)
+    assert all("metadonnees" not in m for m in r["maquettes"])
+
+
+def test_api_liste_par_difference(client, cfgm):
+    r = client.get("/api/sig/maquettes").json()
+    # rien n'a changé : liste vide, même jeton
+    r2 = client.get("/api/sig/maquettes", params={"depuis": r["jeton"]}).json()
+    assert not r2["complet"] and r2["maquettes"] == [] and r2["jeton"] == r["jeton"]
+    # jeton d'une autre session du serveur (redémarrage) : liste complète
+    r3 = client.get("/api/sig/maquettes", params={"depuis": "autre:3"}).json()
+    assert r3["complet"] and len(r3["maquettes"]) == 7
+    # une maquette disparaît du cache : seule sa ligne est renvoyée au balayage suivant
+    m = next(x for x in r["maquettes"] if x["nom"] == "methode2b_latlon")
+    (maq.dossier_cache(cfgm, m["id"]) / "resultat.json").rename(maq.dossier_cache(cfgm, m["id"]) / "resultat.bak")
+    try:
+        r4 = client.get("/api/sig/maquettes", params={"depuis": r["jeton"], "actualiser": True}).json()
+    finally:
+        (maq.dossier_cache(cfgm, m["id"]) / "resultat.bak").rename(maq.dossier_cache(cfgm, m["id"]) / "resultat.json")
+    assert [x["id"] for x in r4["maquettes"]] == [m["id"]] and r4["maquettes"][0]["etat"]["phase"] != "pret"
+
+
+def test_api_emprises_par_zone(client):
+    r = client.get("/api/sig/maquettes").json()
+    pos = [m["positionnement"] for m in r["maquettes"] if (m.get("positionnement") or {}).get("statut") == "positionnee"]
+    x1, y1, x2, y2 = pos[0]["emprise_wgs84"]
+    em = client.get("/api/sig/maquettes/emprises", params={"bbox": f"{x1},{y1},{x2},{y2}"}).json()
+    assert 1 <= len(em["features"]) <= 4
+    assert client.get("/api/sig/maquettes/emprises", params={"bbox": "0,0,1,1"}).json()["features"] == []
+    assert client.get("/api/sig/maquettes/emprises", params={"bbox": "a,b"}).status_code == 422
+
+
+def test_api_description_complete(client):
+    r = client.get("/api/sig/maquettes").json()
+    m = next(x for x in r["maquettes"] if x["nom"] == "methode1_map_conversion_ifc4")
+    d = client.get(f"/api/sig/maquettes/{m['id']}").json()
+    assert d["metadonnees"]["schema"] == "IFC4" and d["positionnement"]["repere"]
+    assert "emprise_geojson" not in d["positionnement"]
+    assert client.get("/api/sig/maquettes/inconnue").status_code == 404
 
 
 def test_api_modele_glb_et_objet(client):

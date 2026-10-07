@@ -6,6 +6,7 @@ Sert aussi l'interface construite (interface/dist) si elle existe.
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import RACINE
@@ -13,6 +14,8 @@ from .routes import VERSION, routeur
 
 app = FastAPI(title="Démonstrateur SIG", version=VERSION)
 app.include_router(routeur)
+# listes de maquettes et emprises : texte JSON très compressible (à reprendre dans l'application du patrimoine)
+app.add_middleware(GZipMiddleware, minimum_size=2000)
 
 _DIST = RACINE / "interface" / "dist"
 if (_DIST / "index.html").is_file():

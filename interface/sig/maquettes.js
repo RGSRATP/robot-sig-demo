@@ -1,11 +1,15 @@
 // Maquettes IFC : arborescence (dossiers, puis lots quand un ouvrage en contient beaucoup), état des traitements,
 // emprises au sol sur la carte, modèles 3D dans la carte (vue3d.js), fiche d'une maquette et de ses objets.
-// Données : /api/sig/maquettes.
+// Prévu pour des milliers de maquettes : liste allégée reçue par différence (/api/sig/maquettes?depuis=…),
+// points regroupés en vue éloignée, emprises demandées pour la zone affichée (/api/sig/maquettes/emprises),
+// description complète demandée à l'ouverture d'une fiche (/api/sig/maquettes/{id}).
 import { envoyer, lire } from './api.js';
 import { afficherMaquette, afficherObjetIfc } from './fiche.js';
 import { bouton, el, icone } from './ui.js';
 
 const ATTENTE_SUIVI_MS = 3000;     // rafraîchissement pendant les traitements
+const ATTENTE_VEILLE_MS = 30000;   // sans traitement : nouvelles maquettes copiées dans le dossier
+const MAX_LIGNES_GROUPE = 200;     // maquettes listées par groupe ouvert (les suivantes à la demande)
 const COULEUR_EMPRISE = '#0079c1';
 const SEUIL_SOUS_GROUPES = 12;     // au-delà, les maquettes d'un dossier sont regroupées par lot
 
@@ -41,14 +45,30 @@ export class GestionnaireMaquettes {
     this.details = new Set();     // ids dont les petits éléments sont chargés
     this.progression = new Map(); // id -> texte de chargement 3D
     this.ouverts = new Set();     // nœuds dépliés de l'arborescence
+    this.automatiques = new Set(); // ids chargés automatiquement : déchargés quand ils sortent de la vue
+    this.complets = new Set();    // nœuds de l'arborescence dont toutes les maquettes sont listées
     this.filtre = '';
     this.ficheOuverte = null;
     this._minuteur = null;
     this._premier = true;
+    this._jeton = null;
+    this._requeteEmprises = null;
   }
 
   async demarrer(police) {
-    this.carte.addSource('sig-maquettes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, promoteId: 'id' });
+    const vide = { type: 'FeatureCollection', features: [] };
+    this.carte.addSource('sig-maquettes-points', { type: 'geojson', data: vide, cluster: true, clusterRadius: 40, clusterMaxZoom: 14 });
+    this.carte.addLayer({ id: 'sig-maquettes-groupes', type: 'circle', source: 'sig-maquettes-points', filter: ['has', 'point_count'],
+      paint: { 'circle-color': COULEUR_EMPRISE, 'circle-opacity': 0.85, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2,
+               'circle-radius': ['step', ['get', 'point_count'], 13, 10, 17, 100, 22, 1000, 28] } });
+    this.carte.addLayer({ id: 'sig-maquettes-point', type: 'circle', source: 'sig-maquettes-points', filter: ['!', ['has', 'point_count']],
+      paint: { 'circle-color': COULEUR_EMPRISE, 'circle-radius': 6, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
+    if (police && this.carte.getStyle().glyphs) {
+      this.carte.addLayer({ id: 'sig-maquettes-groupes-nb', type: 'symbol', source: 'sig-maquettes-points', filter: ['has', 'point_count'],
+        layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 12, 'text-font': [police], 'text-allow-overlap': true },
+        paint: { 'text-color': '#fff' } });
+    }
+    this.carte.addSource('sig-maquettes', { type: 'geojson', data: vide, promoteId: 'id' });
     this.carte.addLayer({ id: 'sig-maquettes-fond', type: 'fill', source: 'sig-maquettes',
       paint: { 'fill-color': COULEUR_EMPRISE, 'fill-opacity': ['case', ['boolean', ['feature-state', 'charge'], false], 0.04, 0.18] } });
     this.carte.addLayer({ id: 'sig-maquettes-contour', type: 'line', source: 'sig-maquettes',
@@ -60,7 +80,7 @@ export class GestionnaireMaquettes {
         paint: { 'text-color': '#003a5d', 'text-halo-color': '#fff', 'text-halo-width': 1.5 } });
     }
     this.carte.addLayer(this.c3d);
-    this.carte.on('moveend', () => { this._chargerALaVue(); this._details(); });
+    this.carte.on('moveend', () => { this._majVue(); this._chargerALaVue(); this._details(); });
     this.panneau.replaceChildren(el('p', { className: 'sig-info', textContent: 'Inventaire des maquettes…' }));
     await this.actualiser();
   }
@@ -87,8 +107,17 @@ export class GestionnaireMaquettes {
    *  dans la limite du budget (les autres restent disponibles à la demande). */
   _chargerALaVue() {
     const seuil = this.inventaire?.zoom_chargement_automatique;
-    if (seuil == null || this.carte.getZoom() < seuil) return;
+    if (seuil == null) return;
     const b = this.carte.getBounds();
+    // les maquettes chargées automatiquement et sorties de la vue (avec une marge) libèrent le budget
+    const mx = (b.getEast() - b.getWest()) * 0.5;
+    const my = (b.getNorth() - b.getSouth()) * 0.5;
+    for (const id of [...this.automatiques]) {
+      const e = this.maquettes.get(id)?.positionnement?.emprise_wgs84;
+      const dehors = !e || e[2] < b.getWest() - mx || e[0] > b.getEast() + mx || e[3] < b.getSouth() - my || e[1] > b.getNorth() + my;
+      if (dehors && id !== this.ficheOuverte && this.c3d.selection?.id !== id) this._decharger(id);
+    }
+    if (this.carte.getZoom() < seuil) return;
     const candidates = [];
     for (const m of this.maquettes.values()) {
       const pos = m.positionnement;
@@ -103,8 +132,20 @@ export class GestionnaireMaquettes {
     for (const m of candidates.sort((p, q) => this._eloignement(p) - this._eloignement(q))) {
       if (n + m.positionnement.affichage.triangles > budget) continue;
       n += m.positionnement.affichage.triangles;
+      this.automatiques.add(m.id);
       this.afficher3d(m.id, true);
     }
+  }
+
+  /** Retire la 3D d'une maquette chargée automatiquement (elle pourra se recharger en revenant). */
+  _decharger(id) {
+    this.automatiques.delete(id);
+    this.affichees.delete(id);
+    this.details.delete(id);
+    this.c3d.retirer(id);
+    this.progression.delete(id);
+    this.carte.setFeatureState({ source: 'sig-maquettes', id }, { charge: false });
+    this._rendrePlusTard();
   }
 
   /** Petits éléments (boulons, platines…) des maquettes affichées : en vue rapprochée, dans la limite du budget. */
@@ -129,24 +170,38 @@ export class GestionnaireMaquettes {
 
   // ------------------------------------------------------------ données
 
-  async actualiser() {
+  /** Liste des maquettes : seules les modifications depuis l'appel précédent sont reçues.
+   *  forcer : le serveur reparcourt tout le dossier (nouvelles maquettes). */
+  async actualiser(forcer = false) {
     clearTimeout(this._minuteur);
     let inv;
     try {
-      inv = await lire('maquettes');
+      const params = {};
+      if (this._jeton) params.depuis = this._jeton;
+      if (forcer) params.actualiser = '1';
+      inv = await lire('maquettes', params);
     } catch (e) {
-      this.panneau.replaceChildren(el('p', { className: 'sig-erreur', textContent: `Maquettes indisponibles : ${e.message}` }));
+      if (!this.maquettes.size) {
+        this.panneau.replaceChildren(el('p', { className: 'sig-erreur', textContent: `Maquettes indisponibles : ${e.message}` }));
+      }
       this._minuteur = setTimeout(() => this.actualiser(), ATTENTE_SUIVI_MS * 5);
       return;
     }
     this.inventaire = inv;
+    this._jeton = inv.jeton;
     const signature = (m) => m && JSON.stringify([m.etat.phase, m.positionnement?.statut, m.locaux?.phase, m.locaux?.nb]);
     const ficheAvant = signature(this.maquettes.get(this.ficheOuverte));
+    if (inv.complet) this.maquettes.clear();
+    for (const id of inv.supprimees || []) {
+      if (this.affichees.has(id)) this._decharger(id);
+      this.maquettes.delete(id);
+    }
     for (const m of inv.maquettes) {
       m.ouvrage = m.dossier.split('/').pop();
       m.nomCourt = nomCourt(m.nom, m.ouvrage);
       this.maquettes.set(m.id, m);
     }
+    const change = inv.complet || inv.maquettes.length || (inv.supprimees || []).length;
     if (this._premier) {
       // déplier les premiers niveaux (ligne, type d'ouvrage)
       for (const m of inv.maquettes) {
@@ -155,31 +210,76 @@ export class GestionnaireMaquettes {
       }
       this._premier = false;
     }
-    this._majEmprises();
-    this._rendre();
-    this._chargerALaVue();
+    if (change) {
+      this._majPoints();
+      this._majVue(true);
+      this._rendre();
+      this._chargerALaVue();
+    }
     // la fiche ouverte n'est redessinée que si son état change (sinon, les résultats affichés seraient perdus)
     if (this.ficheOuverte && this.maquettes.has(this.ficheOuverte)
         && signature(this.maquettes.get(this.ficheOuverte)) !== ficheAvant) {
       this.ouvrirFiche(this.ficheOuverte, false, false);
     }
-    const enCours = inv.maquettes.filter((m) => m.etat.phase === 'en_cours' || m.etat.phase === 'en_attente'
-      || (m.locaux && m.locaux.phase !== 'pret' && m.locaux.phase !== 'erreur')).length;
-    this.surEtat({ total: inv.maquettes.length, enCours, courant: inv.maquettes.find((m) => m.etat.phase === 'en_cours') });
-    if (enCours) this._minuteur = setTimeout(() => this.actualiser(), ATTENTE_SUIVI_MS);
+    let enCours = 0;
+    let courant = null;
+    for (const m of this.maquettes.values()) {
+      if (m.etat.phase === 'en_cours' || m.etat.phase === 'en_attente'
+        || (m.locaux && m.locaux.phase !== 'pret' && m.locaux.phase !== 'erreur')) enCours += 1;
+      if (!courant && m.etat.phase === 'en_cours') courant = m;
+    }
+    this.surEtat({ total: this.maquettes.size, enCours, courant });
+    this._minuteur = setTimeout(() => this.actualiser(), enCours ? ATTENTE_SUIVI_MS : ATTENTE_VEILLE_MS);
   }
 
-  _majEmprises() {
+  /** Points (centres) des maquettes positionnées, regroupés en vue éloignée. */
+  _majPoints() {
     const features = [];
     for (const m of this.maquettes.values()) {
       const pos = m.positionnement;
       if (pos?.statut !== 'positionnee') continue;
-      features.push({ type: 'Feature', geometry: pos.emprise_affichage, properties: { id: m.id, nom: m.nomCourt } });
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: pos.centre_wgs84 }, properties: { id: m.id } });
     }
-    this.carte.getSource('sig-maquettes').setData({ type: 'FeatureCollection', features });
+    this.carte.getSource('sig-maquettes-points').setData({ type: 'FeatureCollection', features });
+  }
+
+  /** Vue éloignée : points regroupés ; vue rapprochée : emprises de la zone affichée, demandées au serveur. */
+  async _majVue(forcer = false) {
+    const seuil = this.inventaire?.zoom_emprises ?? 13;
+    const proche = this.carte.getZoom() >= seuil;
+    for (const c of ['sig-maquettes-groupes', 'sig-maquettes-point', 'sig-maquettes-groupes-nb']) {
+      if (this.carte.getLayer(c)) this.carte.setLayoutProperty(c, 'visibility', proche ? 'none' : 'visible');
+    }
+    if (!proche) return;
+    const b = this.carte.getBounds();
+    const w = b.getEast() - b.getWest();
+    const h = b.getNorth() - b.getSouth();
+    // zone demandée un peu plus large que la vue : pas de nouvelle demande pour un petit déplacement
+    const dedans = this._zone && b.getWest() >= this._zone[0] && b.getSouth() >= this._zone[1]
+      && b.getEast() <= this._zone[2] && b.getNorth() <= this._zone[3] && w > (this._zone[2] - this._zone[0]) / 4;
+    if (dedans && !forcer) return;
+    const zone = [b.getWest() - w / 2, b.getSouth() - h / 2, b.getEast() + w / 2, b.getNorth() + h / 2];
+    const requete = (this._requeteEmprises = Symbol('emprises'));
+    let r;
+    try {
+      r = await lire('maquettes/emprises', { bbox: zone.map((v) => v.toFixed(6)).join(',') });
+    } catch {
+      return;
+    }
+    if (requete !== this._requeteEmprises) return;   // déplacement entre-temps : réponse périmée
+    this._zone = zone;
+    for (const f of r.features) f.properties.nom = this.maquettes.get(f.properties.id)?.nomCourt || '';
+    this.carte.getSource('sig-maquettes').setData(r);
     for (const id of this.affichees) {
       this.carte.setFeatureState({ source: 'sig-maquettes', id }, { charge: this.c3d.estCharge(id) });
     }
+    if (this.ficheOuverte) this.carte.setFeatureState({ source: 'sig-maquettes', id: this.ficheOuverte }, { choisie: true });
+  }
+
+  /** Regroupe les redessins de la liste demandés pendant la même image. */
+  _rendrePlusTard() {
+    if (this._rendreDemande) return;
+    this._rendreDemande = requestAnimationFrame(() => { this._rendreDemande = null; this._rendre(); });
   }
 
   // ------------------------------------------------------------ 3D
@@ -188,10 +288,12 @@ export class GestionnaireMaquettes {
     const m = this.maquettes.get(id);
     const pos = m?.positionnement;
     if (pos?.statut !== 'positionnee') return;
+    if (!automatique) this.automatiques.delete(id);
+    if (this.affichees.has(id) && this.c3d.estCharge(id)) return;
     this.affichees.add(id);
     this.masquees.delete(id);
     this.progression.set(id, 'chargement 3D…');
-    this._rendre();
+    this._rendrePlusTard();
     try {
       await this.c3d.charger(id, `api/sig/maquettes/${id}/modele.glb`, pos.affichage, (p) => {
         const texte = p != null ? `chargement 3D ${Math.round(p * 100)} %` : 'chargement 3D…';
@@ -206,14 +308,16 @@ export class GestionnaireMaquettes {
       this._details();
     } catch (e) {
       this.affichees.delete(id);
+      this.automatiques.delete(id);
       this.progression.set(id, `3D indisponible : ${e.message || e}`);
     }
     this.carte.setFeatureState({ source: 'sig-maquettes', id }, { charge: this.c3d.estCharge(id) });
-    this._rendre();
+    this._rendrePlusTard();
     if (!automatique && this.ficheOuverte === id) this.ouvrirFiche(id, false, false);
   }
 
   masquer3d(id) {
+    this.automatiques.delete(id);
     this.affichees.delete(id);
     this.details.delete(id);
     this.masquees.add(id);
@@ -260,16 +364,27 @@ export class GestionnaireMaquettes {
     } catch (e) {
       this.progression.set(id, `relance impossible : ${e.message}`);
     }
-    await this.actualiser();
+    await this.actualiser(true);
   }
 
   // ------------------------------------------------------------ sélection et fiches
 
   /** Emprise de maquette sous le point écran (id) ou null. */
   empriseSous(point) {
-    const f = this.carte.queryRenderedFeatures([[point.x - 3, point.y - 3], [point.x + 3, point.y + 3]],
-      { layers: ['sig-maquettes-fond'] })[0];
+    const couches = ['sig-maquettes-fond', 'sig-maquettes-point'].filter((c) => this.carte.getLayer(c));
+    const f = this.carte.queryRenderedFeatures([[point.x - 3, point.y - 3], [point.x + 3, point.y + 3]], { layers: couches })[0];
     return f ? f.properties.id : null;
+  }
+
+  /** Groupe de maquettes (vue éloignée) sous le point : zoom pour le déplier. Vrai si un groupe a été touché. */
+  async deplierGroupe(point) {
+    if (!this.carte.getLayer('sig-maquettes-groupes')) return false;
+    const f = this.carte.queryRenderedFeatures([[point.x - 3, point.y - 3], [point.x + 3, point.y + 3]],
+      { layers: ['sig-maquettes-groupes'] })[0];
+    if (!f) return false;
+    const zoom = await this.carte.getSource('sig-maquettes-points').getClusterExpansionZoom(f.properties.cluster_id);
+    this.carte.easeTo({ center: f.geometry.coordinates, zoom: Math.max(zoom, this.carte.getZoom() + 1) });
+    return true;
   }
 
   /** Révèle une maquette dans l'arborescence (dossiers dépliés). */
@@ -283,9 +398,8 @@ export class GestionnaireMaquettes {
     this.panneau.querySelector(`[data-maquette="${id}"]`)?.scrollIntoView({ block: 'nearest' });
   }
 
-  ouvrirFiche(id, zoomer = false, reveler = true) {
-    const m = this.maquettes.get(id);
-    if (!m) return;
+  async ouvrirFiche(id, zoomer = false, reveler = true) {
+    if (!this.maquettes.has(id)) return;
     if (this.ficheOuverte && this.ficheOuverte !== id) {
       this.carte.setFeatureState({ source: 'sig-maquettes', id: this.ficheOuverte }, { choisie: false });
     }
@@ -295,7 +409,16 @@ export class GestionnaireMaquettes {
     }
     if (zoomer) this.zoomer(id);
     if (reveler) this.reveler(id);
-    else this._rendre();
+    else this._rendrePlusTard();
+    let m;
+    try {
+      m = { ...this.maquettes.get(id), ...(await lire(`maquettes/${id}`)) };
+    } catch {
+      m = this.maquettes.get(id);   // description complète indisponible : fiche avec la ligne de la liste
+    }
+    if (this.ficheOuverte !== id || !m) return;   // autre fiche ouverte entre-temps
+    m.ouvrage = m.dossier.split('/').pop();
+    m.nomCourt = nomCourt(m.nom, m.ouvrage);
     afficherMaquette({ ...m, nom: m.nomCourt, nomComplet: m.nom }, {
       chargee: this.affichees.has(id),
       isolee: this.c3d.isole === id,
@@ -466,10 +589,19 @@ export class GestionnaireMaquettes {
     if (ouvert) {
       const ul = el('ul', { className: 'sig-arbre' });
       for (const e of noeud.enfants.values()) ul.append(this._noeud(e, profondeur + 1, forceOuvert));
-      for (const m of [...noeud.maquettes].sort((a, b) => a.nomCourt.localeCompare(b.nomCourt, 'fr'))) {
+      const tri = [...noeud.maquettes].sort((a, b) => a.nomCourt.localeCompare(b.nomCourt, 'fr'));
+      const limite = this.complets.has(noeud.cle) ? tri.length : MAX_LIGNES_GROUPE;
+      for (const m of tri.slice(0, limite)) {
         const f = this._ligneMaquette(m);
         f.style.paddingLeft = `${(profondeur + 1) * 12}px`;
         ul.append(f);
+      }
+      if (tri.length > limite) {
+        const plus = el('button', { type: 'button', className: 'sig-lien', textContent: `Afficher les ${tri.length - limite} autres maquettes` });
+        plus.addEventListener('click', () => { this.complets.add(noeud.cle); this._rendre(); });
+        const li2 = el('li', { className: 'sig-arbre__feuille' }, plus);
+        li2.style.paddingLeft = `${(profondeur + 1) * 12}px`;
+        ul.append(li2);
       }
       li.append(ul);
     }
@@ -491,7 +623,8 @@ export class GestionnaireMaquettes {
       return s;
     })());
     const resume = el('p', { className: 'sig-resume' },
-      `${toutes.length} maquette(s) · ${traitees} traitée(s) · ${positionnees} positionnée(s) · ${this.affichees.size} en 3D`);
+      `${toutes.length} maquette(s) · ${traitees} traitée(s) · ${positionnees} positionnée(s) · ${this.affichees.size} en 3D`
+      + (inv.en_attente ? ` · ${inv.en_attente} en attente de traitement` : ''));
     const tout = (ouvrir) => () => {
       if (ouvrir) {
         for (const m of toutes) {
@@ -506,7 +639,7 @@ export class GestionnaireMaquettes {
     };
     const outils = el('div', { className: 'sig-volet__outils' }, saisie,
       bouton('plein', 'Tout déplier', tout(true)), bouton('moins', 'Tout replier', tout(false)),
-      bouton('actualiser', 'Actualiser la liste (nouvelles maquettes)', () => this.actualiser()));
+      bouton('actualiser', 'Actualiser la liste (nouvelles maquettes)', () => this.actualiser(true)));
 
     const arbre = this._arbre(visibles);
     const ul = el('ul', { className: 'sig-arbre sig-arbre--racine' });

@@ -17,6 +17,13 @@ affichage_3d:
   zoom_details: 18
   budget_triangles_millions: 6         # 3D chargée automatiquement (triangles, petits éléments compris) ;
                                        # au-delà, à la demande. 6 M : fluide sur une carte graphique intégrée
+  zoom_emprises: 13                    # en deçà, les maquettes sont des points regroupés ; au-delà, leurs emprises
+  max_emprises: 600                    # emprises dessinées au plus (les plus proches du centre de la vue)
+
+# Liste des maquettes (des milliers) : tenue à jour par différence ; le dossier n'est entièrement reparcouru
+# (nouvelles maquettes, fichiers modifiés) qu'à cet intervalle, ou par le bouton « Actualiser ».
+inventaire:
+  balayage_secondes: 30
 
 identification:
   systemes_candidats: ["EPSG:2154", "EPSG:3949"]

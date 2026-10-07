@@ -82,6 +82,10 @@ def charger_config(chemin: Path = CHEMIN_GEOREF) -> dict:
                                                "budget_triangles_millions")):
         raise erreur("« affichage_3d » : chargement_automatique_max_mo, zoom_chargement_automatique, zoom_details et "
                      "budget_triangles_millions (nombres positifs) attendus")
+    if not all(_nombre(a3d.get(k)) for k in ("zoom_emprises", "max_emprises")):
+        raise erreur("« affichage_3d » : zoom_emprises et max_emprises (nombres positifs) attendus")
+    if not _nombre((cfg.get("inventaire") or {}).get("balayage_secondes")):
+        raise erreur("« inventaire.balayage_secondes » : nombre positif attendu")
     ident = cfg.get("identification") or {}
     if not isinstance(ident.get("systemes_candidats"), list) or not _nombre(ident.get("tolerance_m"), True):
         raise erreur("section « identification » incomplète (systemes_candidats, tolerance_m)")
@@ -276,6 +280,8 @@ class Traitements:
         self._processus: dict[str, subprocess.Popen] = {}
         self._fils: list[threading.Thread] = []
         self.historique: list[tuple] = []   # (id, tâche, code de sortie ou « verrou »), pour le diagnostic
+        self.termines: list[tuple[int, str]] = []   # (n° d'ordre, id) des traitements finis : suivi de l'inventaire
+        self._numero = 0
 
     def assurer(self, cfgm: dict, maquettes: list[tuple[str, str, Path]]) -> None:
         with self._verrou:
@@ -343,6 +349,14 @@ class Traitements:
             finally:
                 with self._verrou:
                     self._courants.discard(id_)
+                    self._numero += 1
+                    self.termines.append((self._numero, id_))
+                    del self.termines[:-1000]
+
+    def termines_depuis(self, numero: int) -> tuple[int, set[str]]:
+        """Maquettes dont le traitement s'est terminé après « numero » ; renvoie aussi le dernier numéro."""
+        with self._verrou:
+            return self._numero, {i for n, i in self.termines if n > numero}
 
     def _executer(self, id_: str, chemin: Path, cfgm: dict, tache: str = "complet") -> None:
         sortie = dossier_cache(cfgm, id_)
@@ -455,21 +469,29 @@ def _saisie(cfgm: dict, rel: str) -> dict | None:
 
 
 def _geojson_vers_wgs84(geom: dict, repere: dict, vers_wgs84: Transformer) -> dict:
+    """Polygone(s) du repère local vers WGS84 : tous les sommets convertis en un seul appel (des milliers
+    d'anneaux par maquette), puis redécoupés en anneaux."""
     cos, sin = math.cos(math.radians(repere["rotation_deg"])), math.sin(math.radians(repere["rotation_deg"]))
     ech = repere["echelle"]
     ox, oy, _ = repere["origine"]
-
-    def anneau(coords):
-        # même calcul que georef.vers_projete, sur tout l'anneau à la fois
-        xy = np.asarray(coords, dtype=float)[:, :2]
-        px = ox + ech * (cos * xy[:, 0] - sin * xy[:, 1])
-        py = oy + ech * (sin * xy[:, 0] + cos * xy[:, 1])
-        lon, lat = vers_wgs84.transform(px, py)
-        return np.round(np.column_stack([lon, lat]), 8).tolist()
-
-    if geom["type"] == "Polygon":
-        return {"type": "Polygon", "coordinates": [anneau(a) for a in geom["coordinates"]]}
-    return {"type": "MultiPolygon", "coordinates": [[anneau(a) for a in p] for p in geom["coordinates"]]}
+    polygones = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
+    anneaux = [a for p in polygones for a in p]
+    if not anneaux:
+        return {"type": geom["type"], "coordinates": []}
+    xy = np.concatenate([np.asarray(a, dtype=float)[:, :2] for a in anneaux])
+    # même calcul que georef.vers_projete
+    px = ox + ech * (cos * xy[:, 0] - sin * xy[:, 1])
+    py = oy + ech * (sin * xy[:, 0] + cos * xy[:, 1])
+    lon, lat = vers_wgs84.transform(px, py)
+    tous = np.round(np.column_stack([lon, lat]), 8).tolist()
+    sortie, i = [], 0
+    for p in polygones:
+        poly = []
+        for a in p:
+            poly.append(tous[i:i + len(a)])
+            i += len(a)
+        sortie.append(poly)
+    return {"type": "Polygon", "coordinates": sortie[0]} if geom["type"] == "Polygon"         else {"type": "MultiPolygon", "coordinates": sortie}
 
 
 def _emprise(geom: dict) -> list[float]:
@@ -625,22 +647,31 @@ def etat_maquette(cfgm: dict, id_: str, cle: str) -> dict:
     return {"phase": "en_attente", "position": traitements.position(id_)}
 
 
-def decrire(cfg: dict, cfgm: dict, id_: str, rel: str, chemin: Path) -> dict:
-    """Description d'une maquette : état, métadonnées, positionnement."""
+def decrire(cfg: dict, cfgm: dict, id_: str, rel: str, chemin: Path, complet: bool = True) -> dict:
+    """Description d'une maquette : état, métadonnées, positionnement.
+
+    complet=False : ligne de la liste (des milliers de maquettes), sans métadonnées ni données lourdes du
+    positionnement (repère, emprises exactes) ; la fiche demande la description complète.
+    """
     cle = cle_traitement(chemin, cfgm)
     res = resultat(cfgm, id_, cle)
     m = {"id": id_, "fichier": rel, "nom": chemin.stem, "dossier": str(Path(rel).parent.as_posix()),
          "taille_mo": round(chemin.stat().st_size / 1e6, 1), "etat": etat_maquette(cfgm, id_, cle)}
+    if not complet:
+        m["etat"].pop("position", None)   # change à chaque maquette traitée : non suivi dans la liste
     if res:
         m["locaux"] = etat_locaux(cfgm, id_, chemin)
-        m["metadonnees"] = res["metadonnees"]
         m["nb_objets"] = res["geometrie"]["nb_elements"]
-        m["nb_objets_attendus"] = res["geometrie"].get("nb_elements_attendus")
-        m["non_convertis"] = res["geometrie"].get("non_convertis") or {}
-        m["moteur_3d"] = res["geometrie"].get("moteur")
-        m["duree_traitement_s"] = res.get("duree_secondes")
+        if complet:
+            m["metadonnees"] = res["metadonnees"]
+            m["nb_objets_attendus"] = res["geometrie"].get("nb_elements_attendus")
+            m["non_convertis"] = res["geometrie"].get("non_convertis") or {}
+            m["moteur_3d"] = res["geometrie"].get("moteur")
+            m["duree_traitement_s"] = res.get("duree_secondes")
         try:
-            m["positionnement"] = _positionner_memo(cfg, cfgm, id_, rel, res, locaux(cfgm, id_, cle_locaux(chemin, cfgm)))
+            d_locaux = locaux(cfgm, id_, cle_locaux(chemin, cfgm))
+            m["positionnement"] = (positionner(cfg, cfgm, id_, rel, res, d_locaux) if complet
+                                   else _positionner_memo(cfg, cfgm, id_, rel, res, d_locaux))
         except Exception as e:  # garde-fou : une maquette ne doit pas interrompre l'inventaire
             m["positionnement"] = {"statut": "non_positionnee", "methode": None, "libelle": "Non positionnée",
                                    "raison": f"erreur de positionnement ({type(e).__name__} : {e})",
@@ -648,11 +679,18 @@ def decrire(cfg: dict, cfgm: dict, id_: str, rel: str, chemin: Path) -> dict:
     return m
 
 
-_MEMO_POSITIONNEMENT: dict[str, tuple] = {}   # id -> (clé, cfg, cfgm, positionnement)
+_MEMO_POSITIONNEMENT: dict[str, tuple] = {}   # id -> (clé, cfg, cfgm, positionnement allégé, emprise d'affichage)
+# Données lourdes du positionnement : jamais gardées en mémoire pour toutes les maquettes (des milliers) ;
+# l'emprise exacte est recalculée à la demande (fiche, interrogation croisée), l'emprise d'affichage est servie par zone.
+CLES_LOURDES = ("emprise_geojson", "emprise_affichage", "repere", "ecarts_latlon_m")
+
+
+def alleger(pos: dict) -> dict:
+    return {k: v for k, v in pos.items() if k not in CLES_LOURDES}
 
 
 def _positionner_memo(cfg: dict, cfgm: dict, id_: str, rel: str, res: dict, donnees_locaux: dict | None) -> dict:
-    """positionner(), recalculé seulement si la maquette, ses locaux ou la configuration changent.
+    """positionner() allégé, recalculé seulement si la maquette, ses locaux ou la configuration changent.
 
     L'inventaire est redemandé régulièrement par l'interface : sans cela, chaque appel reconvertirait toutes les
     emprises. Un positionnement sans altitude du terrain (service indisponible) n'est pas gardé : nouvel essai.
@@ -662,9 +700,18 @@ def _positionner_memo(cfg: dict, cfgm: dict, id_: str, rel: str, res: dict, donn
     if memo and memo[0] == cle and memo[1] is cfg and memo[2] is cfgm:
         return dict(memo[3])
     pos = positionner(cfg, cfgm, id_, rel, res, donnees_locaux)
+    leger = alleger(pos)
     if pos.get("statut") != "positionnee" or pos.get("altitude_terrain") is not None or not cfgm.get("altimetrie"):
-        _MEMO_POSITIONNEMENT[id_] = (cle, cfg, cfgm, pos)
-    return dict(pos)
+        g = pos.get("emprise_affichage")
+        _MEMO_POSITIONNEMENT[id_] = (cle, cfg, cfgm, leger,
+                                     json.dumps(g, separators=(",", ":")) if g else None)
+    return dict(leger)
+
+
+def emprise_affichage(id_: str) -> str | None:
+    """Emprise simplifiée (texte GeoJSON WGS84) d'une maquette décrite par l'inventaire, ou None."""
+    memo = _MEMO_POSITIONNEMENT.get(id_)
+    return memo[4] if memo else None
 
 
 def une_maquette(cfg: dict, cfgm: dict, id_: str) -> dict | None:
@@ -724,8 +771,193 @@ def inventaire(cfg: dict, cfgm: dict) -> dict:
     }
 
 
+LIGNE = "ligne.json"     # ligne de la liste enregistrée dans le cache de chaque maquette
+VERSION_LIGNE = "1"      # à changer si le contenu d'une ligne change (les lignes enregistrées sont recalculées)
+
+
+class SuiviInventaire:
+    """Liste allégée des maquettes, tenue à jour par différence (prévue pour des milliers de maquettes).
+
+    - balayage complet du dossier (nouvelles maquettes, fichiers modifiés) au plus toutes les
+      « inventaire.balayage_secondes », ou sur demande ; une maquette n'est redécrite que si son fichier ou les
+      fichiers JSON de son cache ont changé ;
+    - entre deux balayages, seules les maquettes en cours de traitement ou qui viennent de finir sont redécrites ;
+    - chaque ligne porte un numéro de version : l'interface ne reçoit que ce qui a changé depuis son dernier appel.
+    """
+
+    def __init__(self, file: "Traitements"):
+        self.file = file
+        self._verrou = threading.Lock()
+        self.session = hashlib.sha1(f"{time.time()}-{id(self)}".encode()).hexdigest()[:8]
+        self.version = 0
+        self.lignes: dict[str, dict] = {}
+        self._versions: dict[str, int] = {}
+        self._signatures: dict[str, tuple] = {}
+        self._fichiers: dict[str, tuple[str, Path]] = {}
+        self._supprimees: dict[str, int] = {}
+        self._balayage = -math.inf
+        self._configs: tuple = (None, None)
+        self._termine = 0
+        self._emprises: dict[str, str | None] = {}   # id -> emprise d'affichage (texte GeoJSON)
+        self._empreinte_config = ""
+
+    @staticmethod
+    def _signature(cfgm: dict, id_: str, chemin: Path) -> tuple:
+        try:
+            st = chemin.stat()
+        except OSError:
+            return ()
+        try:   # un seul parcours du dossier de cache (sous Windows, les dates viennent avec la liste)
+            with os.scandir(dossier_cache(cfgm, id_)) as it:
+                cache = tuple(sorted((e.name, e.stat().st_mtime_ns) for e in it
+                                     if e.name.endswith(".json") and e.name != LIGNE))
+        except OSError:
+            cache = ()
+        return st.st_size, st.st_mtime_ns, cache
+
+    def _actives(self) -> set[str]:
+        return {i for i, l in self.lignes.items()
+                if l["etat"]["phase"] == "en_cours" or (l.get("locaux") or {}).get("phase") == "en_cours"}
+
+    def actualiser(self, cfg: dict, cfgm: dict, forcer: bool = False) -> None:
+        with self._verrou:
+            maintenant = time.monotonic()
+            delai = float((cfgm.get("inventaire") or {}).get("balayage_secondes", 30))
+            nouvelle_config = self._configs[0] is not cfg or self._configs[1] is not cfgm
+            complet = forcer or nouvelle_config or maintenant - self._balayage >= delai
+            if nouvelle_config:   # déclarations, saisies manuelles… : toutes les lignes sont redécrites
+                self._signatures.clear()
+                self._empreinte_config = hashlib.sha1(json.dumps(
+                    [VERSION_LIGNE, VERSION_MODULE, cfg, {k: v for k, v in cfgm.items() if not k.startswith("_")}],
+                    sort_keys=True, default=str).encode("utf-8")).hexdigest()
+            self._termine, termines = self.file.termines_depuis(self._termine)
+            actives = self._actives() | set(self.file.en_cours()) | termines
+            if complet:
+                self._fichiers = {i: (rel, chemin) for i, rel, chemin in fichiers(cfgm)}
+                for i in set(self.lignes) - set(self._fichiers):
+                    self.version += 1
+                    self._supprimees[i] = self.version
+                    for d in (self.lignes, self._versions, self._signatures):
+                        d.pop(i, None)
+                candidats = list(self._fichiers)
+                self._balayage, self._configs = maintenant, (cfg, cfgm)
+            else:
+                candidats = [i for i in actives if i in self._fichiers]
+            changees = []
+            for i in candidats:
+                sig = self._signature(cfgm, i, self._fichiers[i][1])
+                if i in actives or self._signatures.get(i) != sig or i not in self.lignes:
+                    changees.append((i, sig))
+            if complet and changees:
+                self.file.assurer(cfgm, [(i, *self._fichiers[i]) for i, _ in changees])
+            for i, sig in changees:
+                rel, chemin = self._fichiers[i]
+                ligne, emprise = self._decrire(cfg, cfgm, i, rel, chemin, sig, i in actives)
+                self._emprises[i] = emprise
+                self._signatures[i] = sig
+                if ligne != self.lignes.get(i):
+                    self.version += 1
+                    self.lignes[i] = ligne
+                    self._versions[i] = self.version
+
+    def _decrire(self, cfg, cfgm, id_, rel, chemin, sig, active) -> tuple[dict, str | None]:
+        """Ligne de la liste et emprise d'affichage ; relues sur disque (ligne.json du cache) si ni la maquette
+        ni la configuration n'ont changé : au redémarrage, des milliers de maquettes ne sont pas repositionnées."""
+        fichier = dossier_cache(cfgm, id_) / LIGNE
+        cle = hashlib.sha1(json.dumps([rel, sig, self._empreinte_config], default=str).encode("utf-8")).hexdigest()
+        if not active:
+            enr = _lire_json(fichier)
+            if enr and enr.get("cle") == cle:
+                return enr["ligne"], enr.get("emprise")
+        ligne = decrire(cfg, cfgm, id_, rel, chemin, complet=False)
+        emprise = emprise_affichage(id_)
+        pos = ligne.get("positionnement") or {}
+        stable = (ligne["etat"]["phase"] in ("pret", "erreur")
+                  and (ligne.get("locaux") or {}).get("phase", "pret") in ("pret", "erreur")
+                  and not (pos.get("statut") == "positionnee" and pos.get("altitude_terrain") is None
+                           and cfgm.get("altimetrie")))   # sans altitude du terrain : nouvel essai plus tard
+        if stable and fichier.parent.is_dir():
+            try:
+                fichier.write_text(json.dumps({"cle": cle, "ligne": ligne, "emprise": emprise}, ensure_ascii=False,
+                                              separators=(",", ":")), encoding="utf-8")
+            except OSError:
+                pass   # cache en lecture seule : la ligne sera recalculée au prochain démarrage
+        return ligne, emprise
+
+    def oublier_balayage(self) -> None:
+        """Le prochain appel refera un balayage complet (maquette relancée…)."""
+        self._balayage = -math.inf
+
+    def depuis(self, cfgm: dict, jeton: str | None) -> dict:
+        """Lignes modifiées depuis le jeton « session:version » (toutes si le jeton est absent ou vient d'une autre
+        session du serveur), maquettes supprimées, jeton suivant et paramètres d'affichage."""
+        with self._verrou:
+            version = None
+            if jeton and jeton.startswith(f"{self.session}:"):
+                try:
+                    version = int(jeton.split(":", 1)[1])
+                except ValueError:
+                    version = None
+            complet = version is None
+            ids = list(self.lignes) if complet else [i for i, v in self._versions.items() if v > version]
+            a3d = cfgm["affichage_3d"]
+            return {
+                "jeton": f"{self.session}:{self.version}",
+                "complet": complet,
+                "maquettes": [self.lignes[i] for i in sorted(ids, key=lambda i: self.lignes[i]["fichier"].lower())],
+                "supprimees": [] if complet else [i for i, v in self._supprimees.items() if v > version],
+                "total": len(self.lignes),
+                "dossier": cfgm["dossier_ifc"],
+                "zoom_chargement_automatique": a3d["zoom_chargement_automatique"],
+                "zoom_details": a3d["zoom_details"],
+                "zoom_emprises": a3d["zoom_emprises"],
+                "budget_triangles": a3d["budget_triangles_millions"] * 1e6,
+                "traitements_en_cours": self.file.en_cours(),
+                "en_attente": self.file.nb_attente(),
+            }
+
+    def dans_emprise(self, bbox: list[float]) -> list[dict]:
+        """Lignes des maquettes positionnées dont l'emprise (rectangle WGS84) touche bbox [ouest, sud, est, nord]."""
+        o, s, e, n = bbox
+        with self._verrou:
+            lignes = list(self.lignes.values())
+        sortie = []
+        for m in lignes:
+            pos = m.get("positionnement") or {}
+            if pos.get("statut") != "positionnee":
+                continue
+            x1, y1, x2, y2 = pos["emprise_wgs84"]
+            if x2 >= o and x1 <= e and y2 >= s and y1 <= n:
+                sortie.append(m)
+        return sortie
+
+
+suivi = SuiviInventaire(traitements)
+
+
+def emprises_zone(cfgm: dict, bbox: list[float]) -> str:
+    """Emprises simplifiées des maquettes positionnées de la zone (GeoJSON WGS84), les plus proches du centre
+    d'abord, au plus « affichage_3d.max_emprises » ; « tronque » si la zone en contient davantage."""
+    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+
+    def eloignement(m):
+        x, y = m["positionnement"]["centre_wgs84"]
+        return (x - cx) ** 2 + (y - cy) ** 2
+
+    lignes = sorted(suivi.dans_emprise(bbox), key=eloignement)
+    maxi = int(cfgm["affichage_3d"]["max_emprises"])
+    features = []
+    for m in lignes[:maxi]:
+        g = suivi._emprises.get(m["id"])
+        if g:
+            features.append('{"type":"Feature","geometry":%s,"properties":{"id":%s}}' % (g, json.dumps(m["id"])))
+    # texte JSON assemblé directement : les emprises sont gardées sérialisées
+    return ('{"type":"FeatureCollection","features":[%s],"tronque":%s,"total":%d}'
+            % (",".join(features), "true" if len(lignes) > maxi else "false", len(lignes)))
+
+
 def emprises(inv: dict) -> dict:
-    """Emprises au sol des maquettes positionnées (GeoJSON WGS84)."""
+    """Emprises au sol exactes des maquettes positionnées d'un inventaire complet (GeoJSON WGS84)."""
     features = []
     for m in inv["maquettes"]:
         pos = m.get("positionnement") or {}
@@ -737,6 +969,9 @@ def emprises(inv: dict) -> dict:
 
 
 def chemin_maquette(cfgm: dict, id_: str) -> tuple[str, Path] | None:
+    connu = suivi._fichiers.get(id_)
+    if connu and connu[1].is_file():
+        return connu
     for i, rel, chemin in fichiers(cfgm):
         if i == id_:
             return rel, chemin

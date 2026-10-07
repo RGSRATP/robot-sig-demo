@@ -4,6 +4,7 @@ Le routeur est autonome : le demonstrateur-patrimoine l'inclura tel quel (app.in
 """
 from __future__ import annotations
 
+import json
 import platform
 from importlib.metadata import PackageNotFoundError, version
 
@@ -183,21 +184,49 @@ def _config_maquettes() -> dict:
         raise HTTPException(status_code=503, detail=str(e))
 
 
-@routeur.get("/maquettes")
-def maquettes(cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
-    """Maquettes du dossier IFC : état du traitement, métadonnées, positionnement (méthode, emprise, calage).
+def _json(donnees) -> Response:
+    """Réponse JSON sérialisée directement (listes de milliers de maquettes : bien plus rapide que l'encodeur
+    générique de FastAPI)."""
+    return Response(content=json.dumps(donnees, ensure_ascii=False, separators=(",", ":")),
+                    media_type="application/json")
 
-    L'emprise exacte (interrogation croisée) n'est pas envoyée : l'emprise simplifiée suffit au dessin.
+
+@routeur.get("/maquettes")
+def maquettes(depuis: str | None = Query(None, description="jeton du dernier appel : seules les maquettes modifiées"),
+              actualiser: bool = Query(False, description="reparcourir tout le dossier (nouvelles maquettes)"),
+              cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    """Liste allégée des maquettes : état du traitement, positionnement (méthode, rectangle d'emprise, affichage 3D).
+
+    Avec « depuis », seules les maquettes modifiées (et les supprimées) sont renvoyées. Les emprises dessinées
+    sont demandées par zone (/maquettes/emprises), la description complète par maquette (/maquettes/{id}).
     """
-    inv = maq_sig.inventaire(cfg, cfgm)
-    for m in inv["maquettes"]:
-        (m.get("positionnement") or {}).pop("emprise_geojson", None)
-    return inv
+    maq_sig.suivi.actualiser(cfg, cfgm, forcer=actualiser)
+    return _json(maq_sig.suivi.depuis(cfgm, depuis))
 
 
 @routeur.get("/maquettes/emprises")
-def maquettes_emprises(cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
-    return maq_sig.emprises(maq_sig.inventaire(cfg, cfgm))
+def maquettes_emprises(bbox: str | None = Query(None, description="ouest,sud,est,nord (WGS84) ; vide : toutes"),
+                       cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    """Emprises simplifiées (dessin) des maquettes positionnées de la zone, les plus proches du centre d'abord."""
+    try:
+        zone = [float(v) for v in bbox.split(",")] if bbox else [-180.0, -90.0, 180.0, 90.0]
+    except ValueError:
+        zone = []
+    if len(zone) != 4:
+        raise HTTPException(status_code=422, detail="bbox attendue : ouest,sud,est,nord")
+    maq_sig.suivi.actualiser(cfg, cfgm)
+    return Response(content=maq_sig.emprises_zone(cfgm, zone), media_type="application/json")
+
+
+@routeur.get("/maquettes/{id_maquette}")
+def maquette(id_maquette: str, cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    """Description complète d'une maquette (fiche) : métadonnées, positionnement détaillé (repère, calage)."""
+    m = maq_sig.une_maquette(cfg, cfgm, id_maquette)
+    if m is None:
+        raise HTTPException(status_code=404, detail=f"maquette inconnue : {id_maquette}")
+    for cle in ("emprise_geojson", "emprise_affichage"):
+        (m.get("positionnement") or {}).pop(cle, None)
+    return _json(m)
 
 
 def _maquette_traitee(id_maquette: str, cfgm: dict) -> tuple[str, dict]:
@@ -245,7 +274,8 @@ def maquette_recalculer(id_maquette: str, cfg: dict = Depends(_config_valide),
     if trouve is None:
         raise HTTPException(status_code=404, detail=f"maquette inconnue : {id_maquette}")
     maq_sig.traitements.relancer(cfgm, id_maquette, trouve[1])
-    return maq_sig.inventaire(cfg, cfgm)
+    maq_sig.suivi.oublier_balayage()
+    return {"relancee": id_maquette}
 
 
 # ---------------------------------------------------------------- interrogation croisée et locaux (lot 4)
@@ -323,8 +353,13 @@ def objet_maquettes(id_couche: str, n: int, tampon: float | None = Query(None, g
     if n not in charge.l93.index:
         raise HTTPException(status_code=404, detail=f"objet n° {n} absent de la couche")
     geom = charge.l93.geometry.loc[n]
-    inv = maq_sig.inventaire(cfg, cfgm)
-    positionnees = [m for m in inv["maquettes"] if (m.get("positionnement") or {}).get("statut") == "positionnee"]
+    # présélection par rectangle d'emprise (liste allégée), puis description complète des seules candidates
+    maq_sig.suivi.actualiser(cfg, cfgm)
+    o, s, e, n_ = charge.wgs84.geometry.loc[n].bounds
+    marge = _tampon(cfg, tampon) / 50000 + 1e-4   # degrés, largement au-dessus du tampon en mètres
+    candidates = maq_sig.suivi.dans_emprise([o - marge, s - marge, e + marge, n_ + marge])
+    positionnees = [d for d in (maq_sig.une_maquette(cfg, cfgm, m["id"]) for m in candidates)
+                    if d and (d.get("positionnement") or {}).get("statut") == "positionnee"]
     locaux = {}
     for m in positionnees:
         d = maq_sig.locaux_affichables(cfg, cfgm, m)
