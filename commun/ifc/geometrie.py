@@ -29,6 +29,10 @@ from shapely.geometry import Polygon, mapping
 EXCLUS_DEFAUT = ("IfcSpace", "IfcOpeningElement", "IfcAnnotation", "IfcGrid", "IfcVirtualElement")
 DOSSIER_CONVERTISSEUR = Path(__file__).resolve().parent / "convertisseur"
 TAILLE_LOT_UNION = 2000   # technique : union des empreintes par lots
+# Union à précision fixe (grille de 1 cm) : l'union en flottants de dizaines de milliers d'empreintes peut durer plus
+# de 15 minutes (constaté : maquette L17 35LBA, 36 000 objets) ; à 1 cm, quelques secondes. Seuls disparaissent des
+# éléments de moins de 1 cm de large, sans effet sur une emprise ensuite simplifiée à 5 cm.
+GRILLE_UNION_M = 0.01
 
 
 class ConversionImpossible(Exception):
@@ -139,11 +143,11 @@ def _assembler(sortie: Path, decalage, simplification_m: float, simplification_a
         if p.is_valid and p.area > 1e-6:
             formes.append(p)
         if len(formes) >= TAILLE_LOT_UNION:
-            empreintes.append(shapely.union_all(formes))
+            empreintes.append(shapely.union_all(formes, grid_size=GRILLE_UNION_M))
             formes = []
     if formes:
-        empreintes.append(shapely.union_all(formes))
-    emprise = shapely.union_all(empreintes) if empreintes else None
+        empreintes.append(shapely.union_all(formes, grid_size=GRILLE_UNION_M))
+    emprise = shapely.union_all(empreintes, grid_size=GRILLE_UNION_M) if empreintes else None
     if emprise is not None and simplification_m:
         emprise = emprise.simplify(simplification_m)
     # emprise à dessiner : morceaux distants de moins de deux fois la tolérance fusionnés, contour simplifié

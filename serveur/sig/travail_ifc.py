@@ -19,10 +19,27 @@ from pathlib import Path
 from commun.ifc import VERSION_LOCAUX, VERSION_MODULE, geometrie, lecture, locaux, proprietes
 
 
-def _ecrire(chemin: Path, donnees: dict) -> None:
+def _ecrire(chemin: Path, donnees: dict, essais: int = 20) -> None:
+    """Écriture atomique (fichier temporaire puis remplacement). Sous Windows, le remplacement est refusé tant que
+    le serveur lit le fichier (« Accès refusé ») : nouvel essai, quelques dixièmes de seconde plus tard."""
     tmp = chemin.with_suffix(".tmp")
     tmp.write_text(json.dumps(donnees, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(chemin)
+    for essai in range(essais):
+        try:
+            tmp.replace(chemin)
+            return
+        except PermissionError:
+            if essai == essais - 1:
+                raise
+            time.sleep(0.05 * (essai + 1))
+
+
+def _ecrire_etat(chemin: Path, donnees: dict) -> None:
+    """Avancement (etat.json) : une écriture manquée ne doit jamais interrompre le traitement."""
+    try:
+        _ecrire(chemin, donnees, essais=5)
+    except OSError:
+        pass
 
 
 def traiter(ifc: Path, sortie: Path, params: dict) -> dict:
@@ -33,7 +50,7 @@ def traiter(ifc: Path, sortie: Path, params: dict) -> dict:
 
     def etat(phase: str, p: int = 0, message: str = "") -> None:
         a, b = phases[phase]
-        _ecrire(sortie / "etat.json", {"phase": phase, "progression": round(a + (b - a) * p / 100),
+        _ecrire_etat(sortie / "etat.json", {"phase": phase, "progression": round(a + (b - a) * p / 100),
                                        "message": message, "debut": debut, "cle": params["cle"]})
 
     etat("ouverture", 0, "lecture du fichier IFC et conversion 3D")
@@ -85,7 +102,7 @@ def traiter_locaux(ifc: Path, sortie: Path, params: dict) -> None:
     debut = time.time()
 
     def etat(p, message):
-        _ecrire(sortie / "etat.json", {"phase": "locaux", "progression": p, "message": message,
+        _ecrire_etat(sortie / "etat.json", {"phase": "locaux", "progression": p, "message": message,
                                        "debut": debut, "cle": params["cle"]})
 
     etat(0, "lecture du fichier IFC (locaux)")

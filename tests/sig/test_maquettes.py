@@ -314,3 +314,22 @@ def test_familles_par_domaine_puis_type_puis_fichier(cfgm):
     cfgm["familles_objets"] = [{"nom": "Lot", "fichiers": ["methode1*"]}, {"nom": "Structure", "types_ifc": ["IfcWall"]}]
     t = maq.types_objets(cfgm, *m)
     assert [t["familles"][i]["nom"] for i in t["famille"]] == ["Structure", "Structure"]
+
+
+def test_ecriture_etat_refusee_par_windows_n_interrompt_pas(tmp_path, monkeypatch):
+    """Le serveur lit etat.json pendant que le travailleur le remplace : « Accès refusé » sous Windows."""
+    from serveur.sig import travail_ifc
+    refus = {"n": 0}
+    remplacer = Path.replace
+
+    def replace_capricieux(self, cible):
+        if refus["n"] < 3:
+            refus["n"] += 1
+            raise PermissionError(5, "Accès refusé")
+        return remplacer(self, cible)
+
+    monkeypatch.setattr(Path, "replace", replace_capricieux)
+    travail_ifc._ecrire(tmp_path / "resultat.json", {"a": 1})          # réussit après trois refus
+    assert json.loads((tmp_path / "resultat.json").read_text(encoding="utf-8")) == {"a": 1}
+    monkeypatch.setattr(Path, "replace", lambda self, cible: (_ for _ in ()).throw(PermissionError(5, "Accès refusé")))
+    travail_ifc._ecrire_etat(tmp_path / "etat.json", {"phase": "x"})   # toujours refusé : ignoré, pas d'exception
