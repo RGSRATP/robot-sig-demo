@@ -1,10 +1,11 @@
 // Plan des locaux d'une maquette : niveau par niveau, emprises des IfcSpace colorées par typologie et posées
 // à l'altitude de leur plancher dans la 3D, coupe au-dessus du niveau, liste filtrable, fiche d'un local.
 // Données : /api/sig/maquettes/{id}/locaux.
-import { cadrer, hauteurVue } from './camera.js';
+import { auSol, cadrer, hauteurVue } from './camera.js';
 import { lire } from './api.js';
 import { afficherLocal } from './fiche.js';
 import { bouton, el } from './ui.js';
+import { affichage3d } from './vue3d.js';
 
 const TEINTES = ['#8ecae6', '#ffb703', '#90be6d', '#f4a261', '#b5838d', '#a8dadc', '#e9c46a', '#cdb4db',
   '#84a59d', '#f28482', '#bde0fe', '#d4a373', '#c9ada7', '#99d98c', '#ffafcc', '#9fb4c7'];
@@ -65,6 +66,11 @@ export class GestionnaireLocaux {
     else this._cadrerNiveau(0);
   }
 
+  /** Hauteur par rapport au terrain → élévation de la caméra (altitude NGF en relief). */
+  _scene(hauteur) {
+    return this.c3d.versScene(affichage3d(this.maquette.positionnement), hauteur);
+  }
+
   _niveauDe(l) {
     return l.niveau || l.intitule_niveau || 'Sans niveau';
   }
@@ -83,7 +89,7 @@ export class GestionnaireLocaux {
     if (!m || !d) return;
     const locaux = this._locauxDuNiveau();
     if (d.positionnee) {
-      this.c3d.afficherPlan(m.id, m.positionnement.affichage, locaux, (l) => teinte(typologieDe(l)));
+      this.c3d.afficherPlan(m.id, affichage3d(m.positionnement), locaux, (l) => teinte(typologieDe(l)));
       const n = this._infoNiveau();
       // coupe à hauteur d'homme au-dessus du plancher, sans dépasser le plafond du niveau
       const coupe = n?.hauteurs ? Math.min(n.hauteurs[0] + this.hauteurCoupe, n.hauteurs[1]) : null;
@@ -112,7 +118,7 @@ export class GestionnaireLocaux {
     const n = this._infoNiveau();
     if (!b || !this.donnees?.positionnee) return;
     const taille = Math.max((b[2] - b[0]) * 111320 * Math.cos((b[1] * Math.PI) / 180), (b[3] - b[1]) * 110540) / 2;
-    cadrer(this.carte, { centre: [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2], hauteur: n?.hauteurs ? n.hauteurs[0] : 0, taille },
+    cadrer(this.carte, { centre: [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2], hauteur: this._scene(n?.hauteurs ? n.hauteurs[0] : 0), taille },
       { pitch: pitch ?? this.carte.getPitch() });
   }
 
@@ -128,7 +134,7 @@ export class GestionnaireLocaux {
       const [x1, y1, x2, y2] = l.emprise_wgs84;
       const metres = Math.max((x2 - x1) * 111320 * Math.cos((y1 * Math.PI) / 180), (y2 - y1) * 110540);
       cadrer(this.carte, { centre: l.centre_wgs84 || [(x1 + x2) / 2, (y1 + y2) / 2],
-        hauteur: l.hauteurs ? l.hauteurs[0] : 0, taille: metres });
+        hauteur: this._scene(l.hauteurs ? l.hauteurs[0] : 0), taille: metres });
     }
     afficherLocal(l, this.maquette, {
       couleur: teinte(typologieDe(l)),
@@ -143,7 +149,8 @@ export class GestionnaireLocaux {
   }
 
   fermer() {
-    hauteurVue(this.carte, 0);
+    if (this.carte.getTerrain()) auSol(this.carte);
+    else hauteurVue(this.carte, 0);
     this.c3d.attenuer(1);
     this.c3d.retirerPlan();
     this.c3d.definirCoupe(null);

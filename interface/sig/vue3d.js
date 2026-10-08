@@ -4,7 +4,9 @@
 //
 // Repère : les modèles GLB sont en mètres « locaux » (origine du site IFC, axe Y vertical glTF). Le serveur
 // fournit trois points de contrôle (origine, +100 m en X, +100 m en Y) en WGS84 et le décalage vertical
-// par rapport au terrain ; la matrice locale → Mercator en est déduite ici, en double précision. La scène
+// par rapport au terrain ; la matrice locale → Mercator en est déduite ici, en double précision.
+// Carte plate : le terrain est à 0, la scène est en hauteurs par rapport au terrain. Relief activé : la scène est
+// en altitudes NGF (hauteur + altitude du terrain au centre de la maquette, `altitude_terrain`), comme le terrain. La scène
 // Three.js est exprimée en mètres autour d'un point de référence commun (unités Mercator ramenées au mètre) :
 // les nombres restent petits pour le GPU et l'éclairage à facettes reste précis.
 //
@@ -52,6 +54,9 @@ function objetDuTriangle(plages, face) {
   return plages[bas * 2 + 1];
 }
 
+/** Paramètres d'affichage 3D d'une maquette positionnée, avec l'altitude du terrain (relief). */
+export const affichage3d = (pos) => ({ ...pos.affichage, altitude_terrain: pos.altitude_terrain });
+
 export class CoucheMaquettes3D {
   constructor() {
     this.id = 'sig-maquettes-3d';
@@ -60,6 +65,8 @@ export class CoucheMaquettes3D {
     this.modeles = new Map();   // id -> { groupe, opacite, visible, chargement }
     this.reference = null;      // MercatorCoordinate commune
     this.coupe = null;          // hauteur (m au-dessus du terrain) au-dessus de laquelle on coupe
+    this.relief = false;        // relief affiché : scène en altitudes NGF
+    this.aTravers = true;       // relief : ouvrages dessinés à travers le terrain (sous-sols visibles)
     this.selection = null;      // { id, guid, meshes, materiaux }
     this.isole = null;          // id de la maquette isolée
     this.attenuation = 1;       // facteur d'opacité commun (plan des locaux : maquettes atténuées)
@@ -109,13 +116,16 @@ export class CoucheMaquettes3D {
       .multiply(new THREE.Matrix4().makeTranslation(r.x, r.y, 0))
       .multiply(new THREE.Matrix4().makeScale(s, s, s));
     this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();
-    if (this.coupe != null) {
-      this.planCoupe.constant = this.coupe;
+    this.coupeScene = this.coupe != null ? this.coupe + this._solCoupe() : null;
+    if (this.coupeScene != null) {
+      this.planCoupe.constant = this.coupeScene;
       this.renderer.clippingPlanes = [this.planCoupe];
     } else {
       this.renderer.clippingPlanes = [];
     }
     this.renderer.resetState();
+    // relief : le terrain est dans le tampon de profondeur et cacherait les ouvrages enterrés
+    if (this.relief && this.aTravers) this.renderer.clearDepth();
     this.renderer.render(this.scene, this.camera);
     this._placerEtiquettes();
   }
@@ -189,7 +199,7 @@ export class CoucheMaquettes3D {
     const m = new THREE.Matrix4().set(
       k * (ax.x - o.x) / p, k * (ay.x - o.x) / p, 0, k * (o.x - r.x),
       k * (ax.y - o.y) / p, k * (ay.y - o.y) / p, 0, k * (o.y - r.y),
-      0, 0, k * sz, k * affichage.decalage_z_m * sz,
+      0, 0, k * sz, k * (affichage.decalage_z_m + this._sol(affichage)) * sz,
       0, 0, 0, 1,
     );
     if (!gltf) return m;
@@ -197,6 +207,57 @@ export class CoucheMaquettes3D {
     const [ox, oy, oz] = affichage.origine_modele || [0, 0, 0];
     return m.multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2))
       .multiply(new THREE.Matrix4().makeTranslation(ox, oz, -oy));
+  }
+
+  /** Altitude du terrain ajoutée à la scène pour une maquette : 0 sur la carte plate ; en relief, altitude
+   *  du terrain au centre de la maquette (serveur), à défaut celle du relief affiché à son origine. */
+  _sol(affichage) {
+    if (!this.relief) return 0;
+    if (affichage.altitude_terrain != null) return affichage.altitude_terrain;
+    return this.carte?.queryTerrainElevation(affichage.origine) ?? 0;
+  }
+
+  /** Hauteur par rapport au terrain → hauteur dans la scène (altitude NGF en relief). */
+  versScene(affichage, hauteur) {
+    return hauteur + this._sol(affichage);
+  }
+
+  /** Terrain de référence de la coupe (relief) : maquette du plan affiché, sinon la plus proche du centre. */
+  _solCoupe() {
+    if (!this.relief) return 0;
+    if (this.plan) return this._sol(this.plan.affichage);
+    const c = this.carte.getCenter();
+    let proche = null;
+    let d = Infinity;
+    for (const m of this.modeles.values()) {
+      if (!m.groupe) continue;
+      const [x, y] = m.affichage.origine;
+      const e = (x - c.lng) ** 2 + (y - c.lat) ** 2;
+      if (e < d) { d = e; proche = m.affichage; }
+    }
+    return proche ? this._sol(proche) : 0;
+  }
+
+  /** Relief affiché ou non : maquettes, plan des locaux et étiquettes replacés en altitude. */
+  definirRelief(actif) {
+    this.relief = actif;
+    for (const m of this.modeles.values()) {
+      if (!m.groupe) continue;
+      m.groupe.matrix.copy(this._matrice(m.affichage));
+      m.groupe.updateMatrixWorld(true);
+    }
+    if (this.plan) {
+      this.plan.groupe.matrix.copy(this._matrice(this.plan.affichage, false));
+      this.plan.groupe.updateMatrixWorld(true);
+      for (const et of this.etiquettes?.liste || []) et.point.copy(et.local).applyMatrix4(this.plan.groupe.matrix);
+    }
+    this.carte?.triggerRepaint();
+  }
+
+  /** Relief : ouvrages dessinés à travers le terrain (true) ou masqués par lui. */
+  definirATravers(actif) {
+    this.aTravers = actif;
+    this.carte?.triggerRepaint();
   }
 
   /** Lit un GLB et prépare ses matériaux (ombrage à facettes, mats, deux faces). */
@@ -221,7 +282,7 @@ export class CoucheMaquettes3D {
 
   charger(id, url, affichage, progression) {
     if (this.modeles.has(id)) return this.modeles.get(id).chargement;
-    const entree = { groupe: null, opacite: 1, visible: true, detail: null, voirDetail: false };
+    const entree = { groupe: null, opacite: 1, visible: true, detail: null, voirDetail: false, affichage };
     entree.chargement = this._lireGlb(url, progression).then((scene) => {
       const groupe = new THREE.Group();
       groupe.matrixAutoUpdate = false;
@@ -500,7 +561,7 @@ export class CoucheMaquettes3D {
       groupe.add(noeud);
     }
     groupe.updateMatrixWorld(true);
-    this.plan = { id, groupe, volume: null };
+    this.plan = { id, groupe, volume: null, affichage };
     this.scene.add(groupe);
     // étiquettes : code du local, ancrées au plancher, les plus grands locaux d'abord
     const calque = this._calqueEtiquettes();
@@ -519,8 +580,9 @@ export class CoucheMaquettes3D {
       el.textContent = texte;
       el.title = [l.code, l.nom_long || l.nom, l.typologie].filter(Boolean).join(' · ');
       calque.div.append(el);
+      const local = new THREE.Vector3(a.x, a.y, l.z_min + 0.05);
       calque.liste.push({ el, aire: a.aire, largeur: texte.length * ETIQUETTE_CHASSE_PX + 8,
-        point: new THREE.Vector3(a.x, a.y, l.z_min + 0.05).applyMatrix4(groupe.matrix) });
+        local, point: local.clone().applyMatrix4(groupe.matrix) });
     }
     calque.liste.sort((p, q) => q.aire - p.aire);
     this.carte.triggerRepaint();
@@ -581,7 +643,7 @@ export class CoucheMaquettes3D {
     if (!this.plan || !this.camera || !this.reference) return null;
     for (const hit of this._rayon(point).intersectObject(this.plan.groupe, true)) {
       if (!hit.object.isMesh || hit.object.parent === this.plan.volume) continue;
-      if (this.coupe != null && hit.point.z > this.coupe + 0.5) continue;
+      if (this.coupeScene != null && hit.point.z > this.coupeScene + 0.5) continue;
       const noeud = hit.object.parent;
       if (noeud?.userData.local) return { id: this.plan.id, guid: noeud.name, local: noeud.userData.local };
     }
@@ -595,7 +657,7 @@ export class CoucheMaquettes3D {
     const cibles = [...this.modeles.entries()]
       .filter(([k, m]) => m.groupe && m.visible && (!this.isole || this.isole === k)).map(([, m]) => m.groupe);
     for (const hit of rayon.intersectObjects(cibles, true)) {
-      if (this.coupe != null && hit.point.z > this.coupe) continue;
+      if (this.coupeScene != null && hit.point.z > this.coupeScene) continue;
       const ud = hit.object.geometry.userData;
       const plages = ud.plagesVisibles || ud.plages;
       if (!plages || hit.faceIndex == null) continue;   // surbrillance, surcouche (sans plages) ou objet étranger
@@ -648,7 +710,8 @@ export class CoucheMaquettes3D {
     this.carte.triggerRepaint();
   }
 
-  /** Objet sélectionné : centre [lon, lat], hauteur du centre (m par rapport au terrain) et plus grande
+  /** Objet sélectionné : centre [lon, lat], hauteur du centre dans la scène (m par rapport au terrain, altitude
+   *  NGF en relief : c'est l'élévation attendue par la caméra dans les deux cas) et plus grande
    *  dimension (m), d'après ses triangles. null sans sélection. */
   boiteSelection() {
     if (!this.selection?.ajouts.length || !this.reference) return null;

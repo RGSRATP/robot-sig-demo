@@ -11,6 +11,8 @@ import { fermerFiche, monterFiche } from './fiche.js';
 import { versLambert93 } from './lambert93.js';
 import { GestionnaireLocaux } from './locaux.js';
 import { GestionnaireMaquettes } from './maquettes.js';
+import { auSol } from './camera.js';
+import { GestionnaireRelief, idsRelief, styleRelief } from './relief.js';
 import { sectionFiltres } from './filtres.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
@@ -42,6 +44,7 @@ function styleInitial(cfg) {
       layout: { visibility: f.id === cfg.fond_defaut ? 'visible' : 'none' } });
   }
   const style = { version: 8, sources, layers };
+  styleRelief(cfg.relief, style);   // altitudes et ombrage, sous les couches SIG
   if (cfg.glyphes) style.glyphs = cfg.glyphes;   // police des étiquettes (codes des locaux, noms des maquettes)
   return style;
 }
@@ -122,7 +125,10 @@ function controles(zone, carte, cfg) {
       bouton('moins', 'Zoom arrière', () => carte.zoomOut())),
     el('div', { className: 'sig-controles__groupe' }, boussole, b3d),
     el('div', { className: 'sig-controles__groupe' },
-      bouton('accueil', 'Vue initiale', () => carte.flyTo({ center: cfg.centre_wgs84, zoom: cfg.zoom_initial, pitch: 0, bearing: 0, elevation: 0 }))));
+      bouton('accueil', 'Vue initiale', () => {
+        auSol(carte);
+        carte.flyTo({ center: cfg.centre_wgs84, zoom: cfg.zoom_initial, pitch: 0, bearing: 0 });
+      })));
   zone.append(groupe);
   const maj = () => {
     boussole.firstChild.style.transform = `rotate(${-carte.getBearing()}deg)`;
@@ -140,7 +146,9 @@ function piedDePage(pied, carte) {
   const nf = (v, d = 2) => v.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
   carte.on('mousemove', (e) => {
     const [x, y] = versLambert93(e.lngLat.lng, e.lngLat.lat);
-    coords.textContent = `Lambert 93  X ${nf(x)}  Y ${nf(y)}   ·   WGS84 ${nf(e.lngLat.lat, 6)}° N ${nf(e.lngLat.lng, 6)}° E`;
+    const z = carte.getTerrain() ? carte.queryTerrainElevation(e.lngLat) : null;
+    coords.textContent = `Lambert 93  X ${nf(x)}  Y ${nf(y)}   ·   WGS84 ${nf(e.lngLat.lat, 6)}° N ${nf(e.lngLat.lng, 6)}° E`
+      + (z != null ? `   ·   Terrain ${nf(z, 1)} m NGF` : '');
   });
   const majVue = () => {
     vue.textContent = `Zoom ${nf(carte.getZoom(), 1)} · Inclinaison ${Math.round(carte.getPitch())}° · Orientation ${Math.round((carte.getBearing() + 360) % 360)}°`;
@@ -197,7 +205,18 @@ export async function monterCarte(conteneur) {
   // Fond indisponible : la carte reste utilisable, un message l'indique.
   let fondActif = cfg.fond_defaut;
   let echecs = 0;
+  // Relief indisponible : la carte reste plate là où les altitudes manquent, un message l'indique.
+  const sourcesRelief = new Set((cfg.relief?.sources || []).flatMap((s) => Object.values(idsRelief(s.id))));
+  let echecsRelief = 0;
   carte.on('error', (e) => {
+    if (e.sourceId && sourcesRelief.has(e.sourceId)) {
+      echecsRelief += 1;
+      if (echecsRelief === SEUIL_ECHECS_FOND) {
+        console.warn('Relief :', e.error?.message);
+        message.montrer(`Relief IGN indisponible (${e.error?.message || "service d'altitude injoignable"}). Le terrain reste plat là où les altitudes manquent.`);
+      }
+      return;
+    }
     if (!e.sourceId || e.sourceId !== `fond-${fondActif}`) return;
     echecs += 1;
     if (echecs >= SEUIL_ECHECS_FOND) {
@@ -205,6 +224,7 @@ export async function monterCarte(conteneur) {
     }
   });
   carte.on('data', (e) => {
+    if (sourcesRelief.has(e.sourceId) && e.tile?.state === 'loaded') echecsRelief = 0;
     if (e.sourceId === `fond-${fondActif}` && e.tile && e.tile.state === 'loaded') {
       echecs = 0;
       message.cacher();
@@ -259,6 +279,14 @@ export async function monterCarte(conteneur) {
     },
   });
   const vue3d = voletVue3d(pVue3d, carte, c3d, maquettes, appliquerTransparence);
+  // Relief : maquettes en altitude NGF quand il est affiché, centre de la vue ramené au sol
+  const relief = cfg.relief && new GestionnaireRelief(carte, cfg.relief, {
+    surChangement: (actif) => { c3d.definirRelief(actif); auSol(carte); },
+  });
+  if (relief) {
+    pFonds.append(relief.section({ aTravers: c3d.aTravers, surATravers: (v) => c3d.definirATravers(v) }));
+    relief.actif = cfg.relief.actif;
+  }
   function majBadge() {
     const n = (couches.inventaire?.anomalies.length || 0) + (maquettes.nbAnomalies || 0);
     g.badge('anomalies', n, true);
@@ -314,6 +342,7 @@ export async function monterCarte(conteneur) {
   });
 
   const demarrer = async () => {
+    if (relief) { relief.appliquer(); relief.majCase(); }
     await couches.demarrer();
     await maquettes.demarrer(cfg.police);
   };

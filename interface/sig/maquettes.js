@@ -7,6 +7,7 @@ import { envoyer, lire } from './api.js';
 import { auSol, cadrer } from './camera.js';
 import { afficherMaquette, afficherObjetIfc } from './fiche.js';
 import { bouton, el, icone } from './ui.js';
+import { affichage3d } from './vue3d.js';
 
 const ATTENTE_SUIVI_MS = 3000;     // rafraîchissement pendant les traitements
 const ATTENTE_VEILLE_MS = 30000;   // sans traitement : nouvelles maquettes copiées dans le dossier
@@ -296,7 +297,7 @@ export class GestionnaireMaquettes {
     this.progression.set(id, 'chargement 3D…');
     this._rendrePlusTard();
     try {
-      await this.c3d.charger(id, `api/sig/maquettes/${id}/modele.glb`, pos.affichage, (p) => {
+      await this.c3d.charger(id, `api/sig/maquettes/${id}/modele.glb`, affichage3d(pos), (p) => {
         const texte = p != null ? `chargement 3D ${Math.round(p * 100)} %` : 'chargement 3D…';
         if (this.progression.get(id) !== texte) {
           this.progression.set(id, texte);

@@ -1,6 +1,8 @@
 // Cadrage de la caméra autour d'un point en hauteur : objet ou local en sous-sol, en étage. Le centre de la vue
 // n'est pas collé au sol (carte créée avec centerClampedToGround: false) : il est placé à la hauteur de l'objet,
 // et la rotation, l'inclinaison et le zoom au clavier tournent autour de lui.
+// Relief : les hauteurs sont des altitudes NGF ; hors cadrage sur un objet, le centre de la vue suit le terrain
+// (centerClampedToGround activé par auSol, désactivé par cadrer et hauteurVue).
 
 const M_PAR_PX_Z0 = 78271.517;   // mètres par pixel CSS au zoom 0, à l'équateur (tuiles de 512 px)
 const PART_DE_LA_VUE = 3;        // l'objet occupe environ un tiers de la vue
@@ -19,6 +21,7 @@ export function zoomPourTaille(carte, latitude, taille) {
  *  Animation faite ici (jumpTo image par image) : easeTo de MapLibre 6 ignore l'option `elevation`. */
 export function cadrer(carte, { centre, hauteur = 0, taille = 10 }, { pitch, duree = 900 } = {}) {
   const depart = { c: carte.getCenter(), z: carte.getZoom(), h: carte.getCenterElevation(), p: carte.getPitch() };
+  carte.setCenterClampedToGround(false);
   const arrivee = { z: zoomPourTaille(carte, centre[1], taille), p: pitch ?? Math.max(carte.getPitch(), 50) };
   const lisse = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
   const debut = performance.now();
@@ -41,6 +44,7 @@ export function cadrer(carte, { centre, hauteur = 0, taille = 10 }, { pitch, dur
 /** Amène le centre de la vue à `hauteur` mètres (plancher d'un niveau), sans déplacer ni zoomer. */
 export function hauteurVue(carte, hauteur, duree = 500) {
   const depart = carte.getCenterElevation();
+  carte.setCenterClampedToGround(false);
   if (Math.abs(depart - hauteur) < 0.01) return;
   const debut = performance.now();
   const pas = (maintenant) => {
@@ -51,7 +55,15 @@ export function hauteurVue(carte, hauteur, duree = 500) {
   requestAnimationFrame(pas);
 }
 
-/** Ramène le centre de la vue au niveau du sol (avant un cadrage sur une emprise au sol). */
+/** Ramène le centre de la vue au niveau du sol (avant un cadrage sur une emprise au sol) : 0 sur la carte plate,
+ *  le terrain en relief (le centre le suit ensuite). */
 export function auSol(carte) {
+  if (carte.getTerrain()) {
+    carte.setCenterClampedToGround(true);
+    const sol = carte.queryTerrainElevation(carte.getCenter());
+    if (sol != null) carte.setCenterElevation(sol);
+    return;
+  }
+  carte.setCenterClampedToGround(false);
   if (carte.getCenterElevation() !== 0) carte.setCenterElevation(0);
 }

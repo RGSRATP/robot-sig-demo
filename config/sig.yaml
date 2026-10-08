@@ -20,6 +20,27 @@ fonds_ign:   # Géoplateforme IGN, WMTS — URL à vérifier au lot 0
     url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
     attribution: "© IGN Géoplateforme"
 
+# Relief (lot 5) : modèles numériques de terrain de la Géoplateforme, appelés par le navigateur.
+# Service WMS (le WMTS d'altitude n'existe qu'en coordonnées géographiques) : altitudes NGF en flottants 32 bits
+# (image/x-bil;bits=32), une requête par tuile Web Mercator ({bbox-epsg-3857} remplacé par la carte).
+# Section absente : pas de relief. Les maquettes sont alors posées sur la carte plate (hauteur par rapport au terrain).
+relief:
+  actif: false              # relief affiché à l'ouverture
+  ombrage: true             # ombrage calculé sur le relief (désactivable dans l'interface)
+  zoom_max: 15              # tuiles d'altitude demandées jusqu'à ce zoom, agrandies au-delà (z15 : ~4,8 m par pixel)
+  valeur_absente_sous: -1000   # altitude en dessous de laquelle le pixel est « sans donnée » (IGN : -99999, LiDAR : -9999)
+  defaut: rgealti
+  sources:
+    rgealti:
+      libelle: "RGE ALTI (IGN, toute la France)"
+      url: "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32"
+      attribution: "© IGN RGE ALTI"
+    lidarhd:
+      libelle: "LiDAR HD (IGN, plus fin, partiel)"
+      url: "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32"
+      attribution: "© IGN LiDAR HD"
+      secours: rgealti      # pixels sans donnée complétés par cette source
+
 donnees:
   dossier_sig: "donnees/sig"   # relatif à la racine du projet ; parcouru avec ses sous-dossiers
 

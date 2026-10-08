@@ -55,6 +55,9 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         if not isinstance(url, str) or not all(p in url for p in ("{z}", "{x}", "{y}")):
             raise erreur(f"« fonds_ign.{nom}.url » doit contenir {{z}}, {{x}} et {{y}}")
 
+    if cfg.get("relief") is not None:
+        _controler_relief(cfg["relief"], erreur)
+
     if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
         raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")
 
@@ -119,6 +122,55 @@ def _controler(cfg: dict, chemin: Path) -> dict:
 
 def _nombre(v, strictement_positif=False) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and (v > 0 if strictement_positif else v >= 0)
+
+
+def _controler_relief(relief, erreur) -> None:
+    """Section « relief » (facultative) : sources d'altitude WMS en Web Mercator, appelées par le navigateur."""
+    if not isinstance(relief, dict):
+        raise erreur("« relief » doit être une section (actif, ombrage, zoom_max, valeur_absente_sous, defaut, sources)")
+    sources = relief.get("sources")
+    if not isinstance(sources, dict) or not sources or not all(isinstance(v, dict) for v in sources.values()):
+        raise erreur("« relief.sources » doit déclarer au moins une source d'altitude")
+    if relief.get("defaut") not in sources:
+        raise erreur(f"« relief.defaut » ({relief.get('defaut')!r}) doit être l'une de : {', '.join(sources)}")
+    for cle in ("actif", "ombrage"):
+        if not isinstance(relief.get(cle), bool):
+            raise erreur(f"« relief.{cle} » doit valoir true ou false")
+    z = relief.get("zoom_max")
+    if not isinstance(z, int) or isinstance(z, bool) or not 1 <= z <= 20:
+        raise erreur("« relief.zoom_max » doit être un entier entre 1 et 20")
+    v = relief.get("valeur_absente_sous")
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        raise erreur("« relief.valeur_absente_sous » doit être un nombre (ex. -1000)")
+    for nom, s in sources.items():
+        url = s.get("url")
+        if not isinstance(url, str) or "{bbox-epsg-3857}" not in url:
+            raise erreur(f"« relief.sources.{nom}.url » doit contenir {{bbox-epsg-3857}} (tuile Web Mercator)")
+        if "x-bil" not in url.lower() or "WIDTH=256" not in url or "HEIGHT=256" not in url:
+            raise erreur(f"« relief.sources.{nom}.url » doit demander des altitudes brutes "
+                         "(FORMAT=image/x-bil;bits=32) en tuiles de 256 × 256 (WIDTH=256&HEIGHT=256)")
+        secours = s.get("secours")
+        if secours is not None and (secours not in sources or secours == nom):
+            raise erreur(f"« relief.sources.{nom}.secours » doit désigner une autre source de « relief.sources »")
+
+
+def config_relief(cfg: dict) -> dict | None:
+    """Relief pour l'interface (None si la section est absente)."""
+    r = cfg.get("relief")
+    if not r:
+        return None
+    return {
+        "actif": r["actif"],
+        "ombrage": r["ombrage"],
+        "zoom_max": r["zoom_max"],
+        "valeur_absente_sous": r["valeur_absente_sous"],
+        "defaut": r["defaut"],
+        "sources": [
+            {"id": nom, "libelle": s.get("libelle", nom), "url": s["url"], "attribution": s.get("attribution", ""),
+             "secours": s.get("secours")}
+            for nom, s in r["sources"].items()
+        ],
+    }
 
 
 def _controler_esri(cfg: dict, services: list, erreur) -> None:
@@ -193,6 +245,7 @@ def config_carte(cfg: dict) -> dict:
         "glyphes": cfg["carte"].get("glyphes"),
         "hauteur_coupe_plan_m": cfg["carte"]["hauteur_coupe_plan_m"],
         "police": cfg["carte"].get("police"),
+        "relief": config_relief(cfg),
         "fonds": [
             {
                 "id": nom,
