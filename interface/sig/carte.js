@@ -16,6 +16,7 @@ import { GestionnaireRelief, idsRelief, styleRelief } from './relief.js';
 import { GestionnaireBatiments, SOURCE_BATIMENTS, styleBatiments } from './batiments.js';
 import { GestionnaireLidar } from './lidar.js';
 import { GestionnaireTempsReel } from './tempsreel.js';
+import { OutilMesure } from './mesures.js';
 import { sectionFiltres } from './filtres.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
@@ -101,10 +102,15 @@ function voletVue3d(conteneur, carte, c3d, maquettes, appliquerTransparence) {
   vue('Dessus', { pitch: 0, bearing: 0 });
   vue('Oblique', { pitch: INCLINAISON_3D });
   vue('Rasante', { pitch: 80 });
+  const fov = el('input', { type: 'range', min: 20, max: 80, step: 1, value: carte.getVerticalFieldOfView() });
+  const valF = el('output', { textContent: `${Math.round(fov.value)}°` });
+  fov.addEventListener('input', () => { carte.setVerticalFieldOfView(Number(fov.value)); valF.textContent = `${fov.value}°`; });
 
   conteneur.append(
     el('section', { className: 'sig-section' }, el('h3', { textContent: 'Point de vue' }), vues,
-      el('p', { className: 'sig-info', textContent: 'Clic droit + glisser (ou Ctrl + glisser) pour incliner et tourner la vue.' })),
+      ligne('Champ de vision', fov, valF),
+      el('p', { className: 'sig-info', textContent: 'Clic droit + glisser (ou Ctrl + glisser) pour incliner et tourner la vue. '
+        + 'Un champ plus large rapproche la caméra des objets (vue intérieure).' })),
     el('section', { className: 'sig-section' }, el('h3', { textContent: 'Sous-sol' }),
       ligne('Transparence du fond de carte', transparence, valT),
       el('p', { className: 'sig-info', textContent: 'Rend le fond translucide pour lire les ouvrages enterrés sous la ville.' }),
@@ -179,6 +185,7 @@ export async function monterCarte(conteneur) {
   const pLocaux = g.ajouter('locaux', 'Plan des locaux', 'plan');
   const pFonds = g.ajouter('fonds', 'Fonds de carte', 'fonds');
   const pTempsReel = g.ajouter('tempsreel', 'Temps réel', 'temps');
+  const pMesures = g.ajouter('mesures', 'Mesures', 'regle');
   const pRecherche = g.ajouter('recherche', 'Recherche', 'recherche');
   const pAnomalies = g.ajouter('anomalies', 'Anomalies', 'anomalies');
   const anomaliesCouches = el('div');
@@ -204,10 +211,12 @@ export async function monterCarte(conteneur) {
     center: cfg.centre_wgs84,
     zoom: cfg.zoom_initial,
     maxPitch: INCLINAISON_MAX,
+    maxZoom: cfg.zoom_max,   // 24 : la caméra s'approche à quelques mètres d'un objet
     centerClampedToGround: false,   // centre de la vue à la hauteur d'un objet en sous-sol ou en étage (camera.js)
     attributionControl: { compact: true },
     canvasContextAttributes: { antialias: true },
   });
+  carte.setVerticalFieldOfView(cfg.champ_vision_deg);
   carte.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left');
   controles(coque.zone, carte, cfg);
   piedDePage(coque.pied, carte);
@@ -322,6 +331,8 @@ export async function monterCarte(conteneur) {
   if (lidar) pFonds.append(lidar.section());
   // Données en temps réel (Vélib', Hub'Eau, météo, IDFM), interrogées par le serveur
   const tempsReel = new GestionnaireTempsReel(carte, { panneau: pTempsReel, police: cfg.police });
+  // Mesures 2D et 3D : en mode mesure, les clics posent des points au lieu de sélectionner
+  const mesure = new OutilMesure(carte, c3d, { panneau: pMesures, police: cfg.police });
   function majBadge() {
     const n = (couches.inventaire?.anomalies.length || 0) + (maquettes.nbAnomalies || 0);
     g.badge('anomalies', n, true);
@@ -330,6 +341,7 @@ export async function monterCarte(conteneur) {
 
   // Répartition des clics : local du plan affiché, objet de maquette 3D, objet SIG, emprise de maquette.
   carte.on('click', async (e) => {
+    if (mesure.clic(e)) return;
     if (await maquettes.deplierGroupe(e.point)) return;   // groupe de maquettes (vue éloignée) : zoom
     const local = c3d.localSous(e.point);
     if (local) {
@@ -380,6 +392,7 @@ export async function monterCarte(conteneur) {
   });
   // Double-clic sur un objet de maquette : vue centrée sur lui, à sa hauteur (au lieu du zoom de la carte).
   carte.on('dblclick', (e) => {
+    if (mesure.doubleClic()) { e.preventDefault(); return; }
     const cible3d = c3d.objetSous(e.point);
     if (!cible3d) return;
     e.preventDefault();
@@ -398,6 +411,7 @@ export async function monterCarte(conteneur) {
     await couches.demarrer();
     await maquettes.demarrer(cfg.police);
     await tempsReel.demarrer();
+    mesure.installer();
   };
   if (carte.loaded()) demarrer();
   else carte.once('load', demarrer);

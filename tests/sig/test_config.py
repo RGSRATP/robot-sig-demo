@@ -207,3 +207,20 @@ def test_lidar_incomplet_message_clair(tmp_path, modif, attendu):
     cfg_sig.charger_config(_config_lidar(tmp_path, LID.format(**OKL)))   # la base est valide
     with pytest.raises(cfg_sig.ConfigInvalide, match=attendu):
         cfg_sig.charger_config(_config_lidar(tmp_path, LID.format(**{**OKL, **modif})))
+
+
+def test_zoom_et_champ_de_vision():
+    carte = cfg_sig.config_carte(cfg_sig.charger_config())
+    assert carte["zoom_max"] == 24 and 10 <= carte["champ_vision_deg"] <= 90
+
+
+@pytest.mark.parametrize("ligne, attendu", [("zoom_max: 25", "zoom_max"), ("champ_vision_deg: 120", "champ_vision_deg")])
+def test_zoom_et_champ_de_vision_invalides(tmp_path, ligne, attendu):
+    import yaml
+    cfg = yaml.safe_load(cfg_sig.CHEMIN_CONFIG.read_text(encoding="utf-8"))
+    cle, valeur = ligne.split(": ")
+    cfg["carte"][cle] = float(valeur)
+    p = tmp_path / "sig.yaml"
+    p.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(cfg_sig.ConfigInvalide, match=attendu):
+        cfg_sig.charger_config(p)

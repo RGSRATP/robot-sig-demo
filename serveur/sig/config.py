@@ -56,6 +56,12 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         if not isinstance(url, str) or not all(p in url for p in ("{z}", "{x}", "{y}")):
             raise erreur(f"« fonds_ign.{nom}.url » doit contenir {{z}}, {{x}} et {{y}}")
 
+    zmax = carte.get("zoom_max", 22)
+    if not isinstance(zmax, (int, float)) or isinstance(zmax, bool) or not zoom <= zmax <= 24:
+        raise erreur("« carte.zoom_max » doit être un nombre entre le zoom initial et 24 (maximum de MapLibre)")
+    fov = carte.get("champ_vision_deg", 36.87)
+    if not isinstance(fov, (int, float)) or isinstance(fov, bool) or not 10 <= fov <= 90:
+        raise erreur("« carte.champ_vision_deg » doit être un angle entre 10 et 90 degrés")
     if cfg.get("relief") is not None:
         _controler_relief(cfg["relief"], erreur)
     if cfg.get("batiments") is not None:
@@ -367,6 +373,8 @@ def config_carte(cfg: dict) -> dict:
     return {
         "centre_wgs84": cfg["carte"]["centre_wgs84"],
         "zoom_initial": cfg["carte"]["zoom_initial"],
+        "zoom_max": cfg["carte"].get("zoom_max", 22),
+        "champ_vision_deg": cfg["carte"].get("champ_vision_deg", 36.87),
         "fond_defaut": fonds["defaut"],
         "glyphes": cfg["carte"].get("glyphes"),
         "hauteur_coupe_plan_m": cfg["carte"]["hauteur_coupe_plan_m"],

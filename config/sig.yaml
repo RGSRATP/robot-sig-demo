@@ -3,6 +3,8 @@
 carte:
   centre_wgs84: [2.35, 48.85]   # Île-de-France
   zoom_initial: 10
+  zoom_max: 24                  # maximum de MapLibre : la caméra s'approche à ~4 m du point visé (22 : ~17 m)
+  champ_vision_deg: 50          # angle vertical de la caméra ; plus large = caméra plus proche (MapLibre : 36,87)
   systeme_donnees_attendu: "EPSG:2154"
   # Police des étiquettes (codes des locaux) : glyphes de la Géoplateforme, appelés par le navigateur
   glyphes: "https://data.geopf.fr/annexes/ressources/vectorTiles/fonts/{fontstack}/{range}.pbf"

@@ -88,6 +88,8 @@ export class CoucheMaquettes3D {
     this.matsFamilles = new Map();
     this.surTypes = () => {};
     this.nuages = new THREE.Group();   // nuages de points LiDAR (lidar.js), un groupe par dalle ; ajouté à la scène dans onAdd
+    this.aides = new THREE.Group();    // repères (mesures, plan de coupe) : seconde passe, jamais coupés
+    this.plansCoupe = [];              // plans de coupe quelconques (coupe.js), en plus de la coupe horizontale
   }
 
   onAdd(carte, gl) {
@@ -103,6 +105,8 @@ export class CoucheMaquettes3D {
     this.renderer.localClippingEnabled = true;
     this.planCoupe = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
     this.scene.add(this.nuages);
+    this.sceneAides = new THREE.Scene();
+    this.sceneAides.add(this.aides);
   }
 
   onRemove() {
@@ -111,7 +115,7 @@ export class CoucheMaquettes3D {
   }
 
   render(gl, args) {
-    if (!this.reference || (!this.modeles.size && !this.plan && !this.nuages.children.length)) return;
+    if (!this.reference || (!this.modeles.size && !this.plan && !this.nuages.children.length && !this.aides.children.length)) return;
     const principale = new THREE.Matrix4().fromArray(args.defaultProjectionData.mainMatrix);
     const r = this.reference;
     const s = this.echelleRef;
@@ -120,16 +124,16 @@ export class CoucheMaquettes3D {
       .multiply(new THREE.Matrix4().makeScale(s, s, s));
     this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();
     this.coupeScene = this.coupe != null ? this.coupe + this._solCoupe() : null;
-    if (this.coupeScene != null) {
-      this.planCoupe.constant = this.coupeScene;
-      this.renderer.clippingPlanes = [this.planCoupe];
-    } else {
-      this.renderer.clippingPlanes = [];
-    }
+    if (this.coupeScene != null) this.planCoupe.constant = this.coupeScene;
+    this.renderer.clippingPlanes = [...(this.coupeScene != null ? [this.planCoupe] : []), ...this.plansCoupe];
     this.renderer.resetState();
     // terrain et bâtiments 3D sont dans le tampon de profondeur et cacheraient les ouvrages enterrés
     if (this.aTravers && (this.relief || this.batiments)) this.renderer.clearDepth();
     this.renderer.render(this.scene, this.camera);
+    if (this.aides.children.length) {   // repères : sans coupe, par-dessus (profondeur selon chaque matériau)
+      this.renderer.clippingPlanes = [];
+      this.renderer.render(this.sceneAides, this.camera);
+    }
     this._placerEtiquettes();
   }
 
@@ -260,6 +264,60 @@ export class CoucheMaquettes3D {
       this.plan.groupe.updateMatrixWorld(true);
       for (const et of this.etiquettes?.liste || []) et.point.copy(et.local).applyMatrix4(this.plan.groupe.matrix);
     }
+    this.carte?.triggerRepaint();
+  }
+
+  // ---------------------------------------------------------------- repère de la scène
+
+  /** Point de référence de la scène (premier objet 3D, ou point donné si la scène est encore vide). */
+  assurerReference(lngLat) {
+    if (this.reference) return;
+    this.reference = MercatorCoordinate.fromLngLat(lngLat);
+    this.echelleRef = this.reference.meterInMercatorCoordinateUnits();
+  }
+
+  /** [lon, lat] et hauteur de la scène (m) → point de la scène. */
+  versPointScene([lon, lat], z = 0) {
+    this.assurerReference([lon, lat]);
+    const m = MercatorCoordinate.fromLngLat([lon, lat]);
+    return new THREE.Vector3((m.x - this.reference.x) / this.echelleRef, (m.y - this.reference.y) / this.echelleRef, z);
+  }
+
+  /** Point de la scène → { lon, lat, z } (z : altitude NGF en relief, hauteur / terrain sur la carte plate). */
+  depuisScene(v) {
+    const r = this.reference;
+    const ll = new MercatorCoordinate(r.x + v.x * this.echelleRef, r.y + v.y * this.echelleRef, 0).toLngLat();
+    return { lon: ll.lng, lat: ll.lat, z: v.z };
+  }
+
+  /** Vrai si le point de la scène est retiré par une coupe (horizontale ou plan quelconque). */
+  estCoupe(v) {
+    if (this.coupeScene != null && v.z > this.coupeScene + 1e-3) return true;
+    return this.plansCoupe.some((p) => p.distanceToPoint(v) < -1e-3);
+  }
+
+  /** Point 3D visible sous le point écran (maquette, plan des locaux, nuage LiDAR) : { point, nature } ou null. */
+  pointSous(point, toleranceM = 0.5) {
+    if (!this.camera || !this.reference) return null;
+    const rayon = this._rayon(point);
+    rayon.params.Points = { threshold: toleranceM };
+    const cibles = [...this.modeles.entries()].filter(([k, m]) => m.groupe && m.visible && (!this.isole || this.isole === k))
+      .map(([, m]) => m.groupe);
+    if (this.plan) cibles.push(this.plan.groupe);
+    for (const g of this.nuages.children) cibles.push(g);
+    for (const hit of rayon.intersectObjects(cibles, true)) {
+      if (!hit.object.visible || this.estCoupe(hit.point)) continue;
+      let o = hit.object;
+      while (o && o.userData.idModele == null && !o.userData.affichage) o = o.parent;
+      const nature = hit.object.isPoints ? 'nuage LiDAR' : o?.userData.idModele != null ? 'maquette' : 'objet 3D';
+      return { point: hit.point.clone(), nature };
+    }
+    return null;
+  }
+
+  /** Plans de coupe quelconques (THREE.Plane, côté positif conservé). */
+  definirPlansCoupe(plans) {
+    this.plansCoupe = plans;
     this.carte?.triggerRepaint();
   }
 
@@ -676,6 +734,7 @@ export class CoucheMaquettes3D {
     for (const hit of this._rayon(point).intersectObject(this.plan.groupe, true)) {
       if (!hit.object.isMesh || hit.object.parent === this.plan.volume) continue;
       if (this.coupeScene != null && hit.point.z > this.coupeScene + 0.5) continue;
+      if (this.plansCoupe.some((p) => p.distanceToPoint(hit.point) < 0)) continue;
       const noeud = hit.object.parent;
       if (noeud?.userData.local) return { id: this.plan.id, guid: noeud.name, local: noeud.userData.local };
     }
@@ -689,7 +748,7 @@ export class CoucheMaquettes3D {
     const cibles = [...this.modeles.entries()]
       .filter(([k, m]) => m.groupe && m.visible && (!this.isole || this.isole === k)).map(([, m]) => m.groupe);
     for (const hit of rayon.intersectObjects(cibles, true)) {
-      if (this.coupeScene != null && hit.point.z > this.coupeScene) continue;
+      if (this.estCoupe(hit.point)) continue;
       const ud = hit.object.geometry.userData;
       const plages = ud.plagesVisibles || ud.plages;
       if (!plages || hit.faceIndex == null) continue;   // surbrillance, surcouche (sans plages) ou objet étranger
