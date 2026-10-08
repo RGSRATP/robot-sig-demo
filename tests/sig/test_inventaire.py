@@ -160,3 +160,10 @@ def test_libelles_en_double_distingues(couche):
     assert esri.format == "Esri JSON" and geojson.format == "GeoJSON"
     # Rectangle CC49 converti en degrés : légèrement plus large que celui des mêmes objets en WGS84 (~100 m).
     assert esri.emprise_wgs84 == pytest.approx(geojson.emprise_wgs84, abs=2e-3)
+
+
+def test_champ_affichage_de_l_export_arcgis(couche):
+    """Export ArcGIS : le champ d'affichage choisi dans ArcGIS (« displayFieldName ») sert de nom des objets,
+    avant la liste « champs_libelle » (qui aurait pris « nom »)."""
+    assert couche("piege_contour_non_ferme").champ_libelle == "code_support"
+    assert couche("infrageo_esri (.json)").champ_libelle == "nom"

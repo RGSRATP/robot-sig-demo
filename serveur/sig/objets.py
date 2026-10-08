@@ -14,10 +14,9 @@ from datetime import date, datetime, time
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import pyogrio
 from shapely.geometry import box, mapping
 
-from .inventaire import AnomalieCouche, Couche, lire_csv
+from .inventaire import AnomalieCouche, Couche, lire_csv, lire_geo
 
 CACHE_COUCHES = 8  # nombre de couches gardées en mémoire (technique, pas un paramètre métier)
 
@@ -28,8 +27,9 @@ _cache: OrderedDict = OrderedDict()
 class Charge:
     """Couche chargée : objets dans le système d'origine, en WGS84 et en Lambert 93."""
 
-    def __init__(self, origine: gpd.GeoDataFrame):
+    def __init__(self, origine: gpd.GeoDataFrame, avertissements: list[str] | None = None):
         self.origine = origine
+        self.avertissements = avertissements or []   # géométries réparées ou écartées à la lecture
         self.wgs84 = origine.to_crs(4326)
         self.l93 = origine if origine.crs.to_epsg() == 2154 else origine.to_crs(2154)
         self._index_texte: pd.Series | None = None
@@ -48,19 +48,20 @@ def normaliser(texte: str) -> str:
     return "".join(c for c in decompose if unicodedata.category(c) != "Mn")
 
 
-def _lire(couche: Couche) -> gpd.GeoDataFrame:
+def _lire(couche: Couche) -> tuple[gpd.GeoDataFrame, list[str]]:
     chemin = couche._chemin
+    avert = []
     if couche.format == "CSV":
         df, _ = lire_csv(chemin, couche._csv)
         geo = gpd.GeoDataFrame(df.drop(columns=["_x", "_y"]),
                                geometry=gpd.points_from_xy(df["_x"], df["_y"]), crs=couche.systeme)
     else:
-        geo = pyogrio.read_dataframe(chemin, layer=couche.couche)
+        geo, avert = lire_geo(chemin, couche.couche)
         if couche.systeme_source == "configuration" or geo.crs is None:
             geo = geo.set_crs(couche.systeme, allow_override=True)
     geo = geo[geo.geometry.notna() & ~geo.geometry.is_empty].copy()
     geo.index = pd.RangeIndex(len(geo))  # numéro d'objet stable pour une version du fichier
-    return geo
+    return geo, avert
 
 
 def charger(couche: Couche) -> Charge:
@@ -73,7 +74,7 @@ def charger(couche: Couche) -> Charge:
             _cache.move_to_end(cle)
             return _cache[cle]
     try:
-        charge = Charge(_lire(couche))
+        charge = Charge(*_lire(couche))
     except AnomalieCouche:
         raise
     except Exception as e:
@@ -161,6 +162,7 @@ def objets(couche: Couche, bbox: list[float] | None, seuil: int) -> dict:
         "filtre_emprise": bbox is not None and filtre,
         "total_dans_emprise": total,
         "tronque": tronque,
+        "avertissements": charge.avertissements,
     }
 
 

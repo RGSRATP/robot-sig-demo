@@ -76,14 +76,9 @@ style_selection: { couleur: "#E8B400", rayon: 9, epaisseur: 6 }
 # Clés possibles : couche (couche d'un GeoPackage ; absente = toutes), libelle, style, visible, champ_libelle,
 # systeme (déclare le système quand le fichier n'en a pas ou en a un faux ; c'est une déclaration, jamais une supposition),
 # et pour les CSV : colonne_x, colonne_y, systeme (obligatoire), separateur (défaut ";"), encodage (défaut "utf-8").
+# Exports ArcGIS (Esri JSON, InfraGéo) : le champ d'affichage de l'export (« displayFieldName ») sert de nom
+# sans déclaration ; « champ_libelle » ne sert qu'à le remplacer.
 couches_fichiers:
-  # Exports InfraGéo (CANA) : champ affiché comme nom dans la recherche et la fiche
-  - fichier: "Infragéo/CANA/CANA_SupportCables.json"
-    champ_libelle: "bin_voi_nom_uniq"
-  - fichier: "Infragéo/CANA/CANA_PlanDeroulage.geojson"
-    champ_libelle: "pld_dem_id"
-  - fichier: "Infragéo/CANA/CaNA_PlanDeroulage.json"
-    champ_libelle: "pld_dem_id"
 #  - fichier: "gares.gpkg"
 #    couche: "gares"
 #    libelle: "Gares"

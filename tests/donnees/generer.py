@@ -83,6 +83,26 @@ def exports_infrageo(gares_l93: gpd.GeoDataFrame) -> None:
     (JEU / "infrageo_esri_tronque.json").write_text(_esri_json(lignes, 3949, True), encoding="utf-8")
     complet = _esri_json(lignes, 3949, False)
     (JEU / "piege_json_coupe.json").write_text(complet[: len(complet) // 2], encoding="utf-8")
+    contours_non_fermes(gares_l93)
+
+
+def contours_non_fermes(gares_l93: gpd.GeoDataFrame) -> None:
+    """Export ArcGIS de polygones (CC49) dont un contour n'est pas fermé (dernier point à 0,1 mm du premier,
+    cas de CANA/Support.json) et un autre réduit à deux points (irréparable). Champ d'affichage ArcGIS
+    (« displayFieldName ») : « code_support », pris comme nom des objets plutôt que « nom »."""
+    zones = gares_l93.head(6).to_crs(3949)
+    anneaux = [[list(xy) for xy in g.buffer(30).exterior.coords] for g in zones.geometry]
+    anneaux[2][-1] = [anneaux[2][0][0] + 0.0001, anneaux[2][0][1]]
+    anneaux[4] = anneaux[4][:2]
+    export = {"displayFieldName": "code_support", "geometryType": "esriGeometryPolygon",
+              "spatialReference": {"wkid": 3949, "latestWkid": 3949},
+              "fields": [{"name": "objectid", "type": "esriFieldTypeOID", "alias": "objectid"},
+                         {"name": "nom", "type": "esriFieldTypeString", "alias": "nom", "length": 40},
+                         {"name": "code_support", "type": "esriFieldTypeString", "alias": "code", "length": 20}],
+              "features": [{"attributes": {"objectid": i + 1, "nom": nom, "code_support": f"SUP-{i + 1:03d}"},
+                            "geometry": {"rings": [r]}}
+                           for i, (nom, r) in enumerate(zip(zones["nom_gares"], anneaux))]}
+    (JEU / "piege_contour_non_ferme.json").write_text(json.dumps(export, indent=1), encoding="utf-8")
 
 
 def generer() -> None:

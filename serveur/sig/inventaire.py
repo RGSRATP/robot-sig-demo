@@ -14,8 +14,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pyogrio
+import shapely
 from pyproj import CRS, Transformer
 from pyproj.exceptions import CRSError
 
@@ -29,6 +32,8 @@ PROJETS_QGIS = {".qgz", ".qgs"}
 NOMS_PILOTES = {"ESRIJSON": "Esri JSON"}
 # Export ArcGIS (requête « query ») arrêté à la limite du service : drapeau placé en tête ou en fin de fichier.
 LIMITE_TRANSFERT = re.compile(rb'"exceededTransferLimit"\s*:\s*true')
+# Champ d'affichage déclaré par un export ArcGIS (« displayFieldName »), en tête de fichier.
+CHAMP_AFFICHAGE = re.compile(rb'"displayFieldName"\s*:\s*"([^"]+)"')
 OCTETS_LUS_LIMITE = 65536
 
 
@@ -185,9 +190,40 @@ def _message_lecture(e: Exception, chemin: Path) -> str:
     return f"fichier illisible ({_message(e, chemin)})"
 
 
+def _numeros(positions) -> str:
+    return ", ".join(str(int(i) + 1) for i in positions[:5]) + (" …" if len(positions) > 5 else "")
+
+
+def lire_geo(chemin: Path, nom_couche: str | None = None, columns: list[str] | None = None) -> tuple[gpd.GeoDataFrame, list[str]]:
+    """Lit une couche fichier. Une géométrie défectueuse (contour non fermé…) ne fait pas tomber la couche :
+    elle est réparée à la lecture (shapely, on_invalid="fix"), ou écartée si c'est impossible, et signalée.
+    Renvoie la couche et ses avertissements. Le fichier n'est jamais modifié."""
+    try:
+        return pyogrio.read_dataframe(chemin, layer=nom_couche, columns=columns), []
+    except shapely.errors.GEOSException:
+        pass
+    meta, _, wkb, valeurs = pyogrio.raw.read(chemin, layer=nom_couche, columns=columns)
+    geoms = shapely.from_wkb(wkb, on_invalid="ignore")
+    fautives = np.flatnonzero(shapely.is_missing(geoms) & pd.notna(wkb))
+    reparees = shapely.from_wkb(wkb[fautives], on_invalid="fix")
+    # encore invalide après réparation (contour réduit à deux points…) : rien d'exploitable à afficher
+    perdues = shapely.is_missing(reparees) | shapely.is_empty(reparees) | ~shapely.is_valid(reparees)
+    geoms[fautives] = np.where(perdues, None, reparees)
+    avert = []
+    if (~perdues).any():
+        ix = fautives[~perdues]
+        avert.append(f"{len(ix)} géométrie(s) défectueuse(s) (contour non fermé…) réparée(s) à l'affichage : "
+                     f"objet(s) n° {_numeros(ix)} du fichier, à corriger à la source ; le fichier n'est pas modifié")
+    if perdues.any():
+        ix = fautives[perdues]
+        avert.append(f"{len(ix)} géométrie(s) irréparable(s) écartée(s) : objet(s) n° {_numeros(ix)} du fichier")
+    attributs = pd.DataFrame(dict(zip(meta["fields"], valeurs)))
+    return gpd.GeoDataFrame(attributs, geometry=geoms, crs=meta["crs"]), avert
+
+
 def _types_reels(chemin: Path, nom_couche: str | None) -> list[str]:
     """Types des géométries présentes, lus objet par objet (fichier qui déclare un type « Unknown »)."""
-    geoms = pyogrio.read_dataframe(chemin, layer=nom_couche, columns=[]).geometry
+    geoms = lire_geo(chemin, nom_couche, columns=[])[0].geometry
     return sorted(set(geoms[geoms.notna()].geom_type))
 
 
@@ -209,9 +245,20 @@ def _style(cfg: dict, famille: str, rang: int, surcharge: dict | None) -> dict:
     return base
 
 
-def _champ_libelle(cfg: dict, champs: list[str], declare: str | None) -> str | None:
-    if declare and declare in champs:
-        return declare
+def _champ_affichage_esri(chemin: Path) -> str | None:
+    """Champ d'affichage choisi dans ArcGIS, déclaré en tête d'un export Esri JSON (« displayFieldName »)."""
+    with chemin.open("rb") as f:
+        tete = f.read(OCTETS_LUS_LIMITE).split(b'"features"')[0]
+    m = CHAMP_AFFICHAGE.search(tete)
+    return m.group(1).decode("utf-8", "replace") if m else None
+
+
+def _champ_libelle(cfg: dict, champs: list[str], declare: str | None, export: str | None = None) -> str | None:
+    """Champ affiché comme nom : déclaré dans la configuration, sinon celui de l'export ArcGIS, sinon le premier
+    de « champs_libelle » présent."""
+    for c in (declare, export):
+        if c and c in champs:
+            return c
     minuscules = {c.lower(): c for c in champs}
     return next((minuscules[n.lower()] for n in cfg["champs_libelle"] if n.lower() in minuscules), None)
 
@@ -251,6 +298,7 @@ def _couche(cfg, dossier, chemin, nom_couche, d, rang) -> Couche:
     fmt = FORMATS[chemin.suffix.lower()]
     avert: list[str] = []
     csv_params = None
+    champ_export = None   # champ d'affichage d'un export ArcGIS
 
     if fmt == "CSV":
         if "systeme" not in d:
@@ -278,6 +326,8 @@ def _couche(cfg, dossier, chemin, nom_couche, d, rang) -> Couche:
         if not type_geom:
             raise AnomalieCouche("table sans géométrie")
         fmt = NOMS_PILOTES.get(info.get("driver"), fmt)
+        if fmt == "Esri JSON":
+            champ_export = _champ_affichage_esri(chemin)
         if fmt == "Esri JSON" and _export_tronque(chemin):
             avert.append(f"export ArcGIS tronqué : le service a atteint sa limite de transfert, seuls {nb} objets "
                          "ont été exportés (« exceededTransferLimit »). Refaites l'export par pages ou déclarez le service")
@@ -335,7 +385,7 @@ def _couche(cfg, dossier, chemin, nom_couche, d, rang) -> Couche:
         visible=bool(d.get("visible", True)),
         style=_style(cfg, famille, rang, d.get("style")),
         champs=champs,
-        champ_libelle=_champ_libelle(cfg, champs, d.get("champ_libelle")),
+        champ_libelle=_champ_libelle(cfg, champs, d.get("champ_libelle"), champ_export),
         avertissements=avert,
         _csv=csv_params,
         _chemin=chemin,

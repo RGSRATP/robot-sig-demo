@@ -51,6 +51,29 @@ def test_polygones_mixtes_servis(couche):
     assert {f["geometry"]["type"] for f in fc["features"]} == {"Polygon", "MultiPolygon"}
 
 
+def test_geometrie_defectueuse_reparee_ou_ecartee_sans_bloquer(couche):
+    """Export ArcGIS dont un contour n'est pas fermé (réparé) et un autre réduit à deux points (écarté) :
+    la couche se charge, les autres objets sont intacts, les deux écarts sont signalés (cas CANA/Support.json)."""
+    c = couche("piege_contour_non_ferme")
+    charge = obj.charger(c)
+    assert len(charge.origine) == 5 and charge.origine.geometry.is_valid.all()
+    assert list(charge.origine["objectid"]) == [1, 2, 3, 4, 6]
+    fc = obj.objets(c, None, 100_000)
+    assert len(fc["features"]) == 5
+    reparee, ecartee = fc["avertissements"]
+    assert "réparée" in reparee and "n° 3 du fichier" in reparee
+    assert "écartée" in ecartee and "n° 5 du fichier" in ecartee
+
+
+def test_geometrie_defectueuse_route(client_test, couche):
+    r = client_test.get(f"/api/sig/couches/{couche('piege_contour_non_ferme').id}/objets")
+    assert r.status_code == 200 and len(r.json()["avertissements"]) == 2
+
+
+def test_couche_saine_sans_avertissement(couche):
+    assert obj.objets(couche("infrageo_esri (.json)"), None, 100_000)["avertissements"] == []
+
+
 def test_grosse_couche_exige_emprise(couche):
     with pytest.raises(ValueError, match="bbox"):
         obj.objets(couche("Gares SNCF (France)"), None, 1000)

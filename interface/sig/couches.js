@@ -188,7 +188,9 @@ export class GestionnaireCouches {
           ? `${fc.features.length} / ${fc.total_dans_emprise} dans l'emprise (zoomer pour tout voir)`
           : `${fc.features.length} dans l'emprise affichée`;
       }
-      this._info(id, info, fc.tronque);
+      // géométries défectueuses réparées ou écartées par le serveur : la couche s'affiche, l'écart est signalé
+      if (fc.avertissements?.length) info = [info, ...fc.avertissements.map((a) => `⚠ ${a}`)].filter(Boolean).join(' · ');
+      this._info(id, info, fc.tronque || fc.avertissements?.length > 0);
     } catch (e) {
       if (this._seq.get(id) !== seq) return;
       this._info(id, `erreur : ${e.message}`, true);

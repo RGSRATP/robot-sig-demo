@@ -23,5 +23,5 @@ Pour le régénérer : `.venv\Scripts\python tests\donnees\generer.py` (téléch
 | `sncf_gares_france.csv` | Grosse couche (6 469 objets) pour le filtre d'emprise (seuil de test : 1 000) |
 | `autre_systeme_cc49.gpkg` | Système CC49 (EPSG:3949) : converti, avec avertissement |
 | `systeme_declare_config.gpkg` | Système faux dans le fichier, corrigé par la clé `systeme` de la config |
-| `piege_*` | Jeu piégé : corrompu, vide, faux GeoJSON, `.prj` ou `.shx` manquant, CSV non déclaré / sans colonnes / coordonnées invalides, système incohérent |
+| `piege_*` | Jeu piégé : corrompu, vide, faux GeoJSON, `.prj` ou `.shx` manquant, CSV non déclaré / sans colonnes / coordonnées invalides, système incohérent, JSON coupé, contour non fermé (réparé) ou réduit à deux points (écarté) |
 | `notes.txt` | Fichier non géographique, listé comme ignoré |
