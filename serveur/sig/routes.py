@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
 from . import config as cfg_sig
+from . import contexte as ctx_sig
 from . import croisement as crois_sig
 from . import esri as esri_sig
 from . import inventaire as inv_sig
@@ -399,3 +400,20 @@ def temps_reel_donnees(id_source: str, cfg: dict = Depends(_config_valide)):
         return tr_sig.donnees(cfg, id_source)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"source temps réel inconnue : {id_source}")
+
+
+# ---------------------------------------------------------------- contexte d'une maquette (lot 5, croisements)
+
+@routeur.get("/maquettes/{id_maquette}/contexte")
+def maquette_contexte(id_maquette: str, actualiser: bool = False, format: str = Query("json", pattern="^(json|csv)$"),
+                      cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    """Risques (Géorisques), bâti environnant (BDNB) et niveau du cours d'eau le plus proche (Hub'Eau)."""
+    if not cfg.get("contexte"):
+        raise HTTPException(status_code=404, detail="section « contexte » absente de config/sig.yaml")
+    m = _maquette_decrite(id_maquette, cfg, cfgm)
+    if (m.get("positionnement") or {}).get("statut") != "positionnee":
+        raise HTTPException(status_code=422, detail=f"{m['nom']} : maquette non positionnée")
+    d = ctx_sig.contexte(cfg, m, actualiser=actualiser)
+    if format == "csv":
+        return _csv(cfg, ctx_sig.COLONNES_BATI, ctx_sig.lignes_bati(d), f"bati_{m['nom']}")
+    return {k: v for k, v in d.items() if not k.startswith("_")}

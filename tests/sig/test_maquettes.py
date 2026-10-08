@@ -75,6 +75,21 @@ def test_config_incomplete(tmp_path):
         maq.charger_config(tmp_path / "absent.yaml")
 
 
+def test_config_rendu(tmp_path):
+    """Réglages du rendu 3D : valeurs par défaut si absents, message clair si invalides."""
+    import yaml
+    from serveur.sig.maquettes import CHEMIN_GEOREF
+    cfg = yaml.safe_load(CHEMIN_GEOREF.read_text(encoding="utf-8"))
+    cfg["affichage_3d"].pop("rendu", None)
+    p = tmp_path / "g.yaml"
+    p.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
+    assert maq.charger_config(p)["affichage_3d"]["rendu"]["aretes"] is True
+    cfg["affichage_3d"]["rendu"] = {"aretes": "oui"}
+    p.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(maq.ConfigMaquettesInvalide, match="rendu"):
+        maq.charger_config(p)
+
+
 def test_config_saisie_manuelle_incomplete(tmp_path):
     texte = CONFIG.read_text(encoding="utf-8").replace("    y: 6860000.0\n", "")
     p = tmp_path / "g.yaml"

@@ -377,3 +377,6 @@ a.sig-bouton { text-decoration: none; display: inline-block; }
 
 /* Plan de coupe : poignées déplaçables aux extrémités */
 .sig-poignee-coupe { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid #e8590c; cursor: grab; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+
+/* Contexte d'une maquette : niveau de risque */
+.sig-niveau-risque { display: inline-block; padding: 0 6px; border-radius: 8px; color: #fff; font-size: 11px; font-weight: 600; }

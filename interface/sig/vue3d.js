@@ -93,7 +93,7 @@ export class CoucheMaquettes3D {
     this.plansCoupe = [];              // plans de coupe quelconques (coupe.js), en plus de la coupe horizontale
     // Rendu (config/georef_maquettes.yaml, affichage_3d.rendu ; réglable dans le volet Vue 3D)
     this.rendu = { aretes: true, angle_aretes_deg: 30, aretes_max_triangles_millions: 1.5, couleur_aretes: '#1f2328',
-      opacite_aretes: 0.4, exposition: 1, contraste_lumiere: 1 };
+      opacite_aretes: 0.4, exposition: 1, contraste_lumiere: 1, zoom_aretes: 17 };
     this.matAretes = new THREE.LineBasicMaterial({ color: this.rendu.couleur_aretes, transparent: true,
       opacity: this.rendu.opacite_aretes, depthWrite: false });
     this.surRendu = () => {};
@@ -139,6 +139,7 @@ export class CoucheMaquettes3D {
     this.coupeScene = this.coupe != null ? this.coupe + this._solCoupe() : null;
     if (this.coupeScene != null) this.planCoupe.constant = this.coupeScene;
     this.renderer.clippingPlanes = [...(this.coupeScene != null ? [this.planCoupe] : []), ...this.plansCoupe];
+    this.matAretes.visible = this.carte.getZoom() >= this.rendu.zoom_aretes;   // de loin, pas d'arêtes
     this.renderer.resetState();
     // terrain et bâtiments 3D sont dans le tampon de profondeur et cacheraient les ouvrages enterrés
     if (this.aTravers && (this.relief || this.batiments)) this.renderer.clearDepth();

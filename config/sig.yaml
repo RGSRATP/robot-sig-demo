@@ -143,6 +143,21 @@ temps_reel:
     periode_s: 60
     attribution: "Île-de-France Mobilités (PRIM)"
 
+# Contexte d'une maquette (lot 5, croisements) : risques (Géorisques), bâti environnant (BDNB), niveau du cours
+# d'eau le plus proche (Hub'Eau), interrogés par le serveur à la demande (bouton de la fiche), gardés en cache.
+contexte:
+  dossier_cache: "cache/contexte"
+  cache_heures: 24
+  georisques: "https://georisques.gouv.fr/api/v1"
+  rayon_m: 500                       # installations classées, sites pollués, cavités, mouvements de terrain
+  rayon_inondation_m: 1000           # atlas des zones inondables
+  bdnb: "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/bbox"
+  tampon_bati_m: 30                  # bande autour de l'emprise : bâti au-dessus ou au bord de l'ouvrage
+  annee_bati_ancien: 1948            # construit avant : « bâti ancien » (fondations superficielles, maçonnerie)
+  max_batiments: 1500                # bâtiments lus au plus (la BDNB répond par pages de 10, ~4 s par 100) : au-delà, liste tronquée (signalé)
+  hubeau: "https://hubeau.eaufrance.fr/api/v2/hydrometrie"
+  rayon_station_km: 5                # station hydrométrique la plus proche dans ce rayon
+
 donnees:
   dossier_sig: "donnees/sig"   # relatif à la racine du projet ; parcouru avec ses sous-dossiers
 

@@ -26,6 +26,7 @@ affichage_3d:
   rendu:                               # aspect des maquettes (modifiable aussi dans le volet Vue 3D)
     aretes: true                       # contours des objets : arêtes vives tracées en trait fin
     angle_aretes_deg: 30               # angle entre deux faces au-delà duquel l'arête est tracée
+    zoom_aretes: 17                    # arêtes affichées à partir de ce zoom (de loin, elles noircissent les objets fins)
     aretes_max_triangles_millions: 1.5 # maquette plus lourde : pas d'arêtes (calcul trop long dans le navigateur)
     couleur_aretes: "#1f2328"
     opacite_aretes: 0.4

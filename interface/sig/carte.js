@@ -7,6 +7,7 @@ import './carte.css';
 import { lire } from './api.js';
 import { GestionnaireCouches } from './couches.js';
 import { sectionMaquette, sectionObjet } from './croisement.js';
+import { sectionContexte } from './contexte.js';
 import { afficherBatiment, afficherTempsReel, fermerFiche, monterFiche } from './fiche.js';
 import { versLambert93 } from './lambert93.js';
 import { GestionnaireLocaux } from './locaux.js';
@@ -149,7 +150,7 @@ function sectionRendu(c3d) {
       curseur('Opacité des arêtes', 'opacite_aretes', 0.1, 1, 0.05),
       curseur('Luminosité', 'exposition', 0.5, 1.8, 0.05),
       curseur('Contraste de l’éclairage', 'contraste_lumiere', 0.5, 1.6, 0.05),
-      el('p', { className: 'sig-info', textContent: `Arêtes calculées pour les maquettes de moins de ${Number(r.aretes_max_triangles_millions).toLocaleString('fr-FR')} million(s) de triangles.` }));
+      el('p', { className: 'sig-info', textContent: `Arêtes affichées à partir du zoom ${r.zoom_aretes}, pour les maquettes de moins de ${Number(r.aretes_max_triangles_millions).toLocaleString('fr-FR')} million(s) de triangles.` }));
   };
   // la configuration arrive avec la liste des maquettes : le volet se met à jour
   const prec = c3d.surRendu;
@@ -324,7 +325,8 @@ export async function monterCarte(conteneur) {
   maquettes = new GestionnaireMaquettes(carte, c3d, {
     panneau: pMaquettes,
     anomalies: anomaliesMaquettes,
-    complementsFiche: (m) => sectionMaquette(m, { couches, ouvrirObjetSig: (id, n) => couches.ouvrirObjet(id, n, true) }),
+    complementsFiche: (m) => [...sectionMaquette(m, { couches, ouvrirObjetSig: (id, n) => couches.ouvrirObjet(id, n, true) }),
+      ...sectionContexte(m, { carte, police: cfg.police })],
     planLocaux: (m) => locaux.ouvrir(m),
     surSelection: () => couches.deselectionner(false),
     surEtat: ({ total, enCours, courant }) => {

@@ -70,6 +70,12 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         _controler_lidar(cfg["lidar"], erreur)
     if cfg.get("temps_reel") is not None:
         _controler_temps_reel(cfg["temps_reel"], erreur)
+    if cfg.get("contexte") is not None:
+        cx = cfg["contexte"]
+        if not isinstance(cx, dict) or not all(isinstance(cx.get(k), str) and cx[k] for k in ("dossier_cache", "georisques", "bdnb", "hubeau"))                 or not all(_nombre(cx.get(k), True) for k in ("cache_heures", "rayon_m", "rayon_inondation_m", "tampon_bati_m",
+                                                              "annee_bati_ancien", "max_batiments", "rayon_station_km")):
+            raise erreur("section « contexte » incomplète (dossier_cache, georisques, bdnb, hubeau : textes ; cache_heures, rayon_m, "
+                         "rayon_inondation_m, tampon_bati_m, annee_bati_ancien, max_batiments, rayon_station_km : nombres > 0)")
 
     if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
         raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")
