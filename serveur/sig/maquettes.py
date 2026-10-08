@@ -84,6 +84,12 @@ def charger_config(chemin: Path = CHEMIN_GEOREF) -> dict:
                      "budget_triangles_millions (nombres positifs) attendus")
     if not all(_nombre(a3d.get(k)) for k in ("zoom_emprises", "max_emprises")):
         raise erreur("« affichage_3d » : zoom_emprises et max_emprises (nombres positifs) attendus")
+    rendu = a3d.setdefault("rendu", {})
+    if not isinstance(rendu, dict) or not isinstance(rendu.setdefault("aretes", True), bool) or not all(
+            _nombre(rendu.setdefault(k, v)) for k, v in (("angle_aretes_deg", 30), ("aretes_max_triangles_millions", 1.5),
+                                                         ("opacite_aretes", 0.4), ("exposition", 1.0), ("contraste_lumiere", 1.0)))             or not isinstance(rendu.setdefault("couleur_aretes", "#1f2328"), str):
+        raise erreur("« affichage_3d.rendu » : aretes (true/false), angle_aretes_deg, aretes_max_triangles_millions, "
+                     "couleur_aretes, opacite_aretes, exposition, contraste_lumiere attendus")
     if not _nombre((cfg.get("inventaire") or {}).get("balayage_secondes")):
         raise erreur("« inventaire.balayage_secondes » : nombre positif attendu")
     for i, f in enumerate(cfg.get("familles_objets") or [], 1):
@@ -916,6 +922,7 @@ class SuiviInventaire:
                 "zoom_details": a3d["zoom_details"],
                 "zoom_emprises": a3d["zoom_emprises"],
                 "budget_triangles": a3d["budget_triangles_millions"] * 1e6,
+                "rendu": a3d["rendu"],
                 "traitements_en_cours": self.file.en_cours(),
                 "en_attente": self.file.nb_attente(),
             }

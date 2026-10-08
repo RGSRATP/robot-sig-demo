@@ -23,6 +23,7 @@ const COULEUR_CONTOUR_PLAN = 0x2b3137;
 const ZOOM_ETIQUETTES = 17;        // étiquettes des locaux à partir de ce zoom
 const ETIQUETTE_HAUTEUR_PX = 16;   // encombrement d'une étiquette (évitement des chevauchements)
 const ETIQUETTE_CHASSE_PX = 6.6;   // largeur moyenne d'un caractère
+const ARETES_PAQUET = 40000;       // triangles traités entre deux images pour le calcul des arêtes
 
 /** Point d'ancrage d'une étiquette : barycentre du plus grand polygone de l'emprise (repère local). */
 function ancrage(geojson) {
@@ -90,19 +91,31 @@ export class CoucheMaquettes3D {
     this.nuages = new THREE.Group();   // nuages de points LiDAR (lidar.js), un groupe par dalle ; ajouté à la scène dans onAdd
     this.aides = new THREE.Group();    // repères (mesures, plan de coupe) : seconde passe, jamais coupés
     this.plansCoupe = [];              // plans de coupe quelconques (coupe.js), en plus de la coupe horizontale
+    // Rendu (config/georef_maquettes.yaml, affichage_3d.rendu ; réglable dans le volet Vue 3D)
+    this.rendu = { aretes: true, angle_aretes_deg: 30, aretes_max_triangles_millions: 1.5, couleur_aretes: '#1f2328',
+      opacite_aretes: 0.4, exposition: 1, contraste_lumiere: 1 };
+    this.matAretes = new THREE.LineBasicMaterial({ color: this.rendu.couleur_aretes, transparent: true,
+      opacity: this.rendu.opacite_aretes, depthWrite: false });
+    this.surRendu = () => {};
   }
 
   onAdd(carte, gl) {
     this.carte = carte;
     this.camera = new THREE.Camera();
     this.scene = new THREE.Scene();
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f96, 1.4));
-    const soleil = new THREE.DirectionalLight(0xffffff, 2.2);
-    soleil.position.set(-0.6, -1.0, 1.4);   // venant du nord-ouest, en hauteur (repère de la scène : y vers le sud)
-    this.scene.add(soleil);
+    // Éclairage : ciel et sol (ambiance), lumière principale venant du nord-ouest en hauteur, lumière d'appoint du
+    // sud-est (faces à l'ombre lisibles). Repère de la scène : y vers le sud.
+    this.lumCiel = new THREE.HemisphereLight(0xf1f5ff, 0x7a7266, 1);
+    this.lumCle = new THREE.DirectionalLight(0xfff8ee, 2.2);
+    this.lumCle.position.set(-0.5, -0.9, 1.3);
+    this.lumAppoint = new THREE.DirectionalLight(0xdde8ff, 0.6);
+    this.lumAppoint.position.set(0.8, 0.6, 0.35);
+    this.scene.add(this.lumCiel, this.lumCle, this.lumAppoint);
     this.renderer = new THREE.WebGLRenderer({ canvas: carte.getCanvas(), context: gl, antialias: true });
     this.renderer.autoClear = false;
     this.renderer.localClippingEnabled = true;
+    this.renderer.toneMapping = THREE.NeutralToneMapping;   // correction de tons respectueuse des couleurs IFC
+    this._appliquerLumieres();
     this.planCoupe = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
     this.scene.add(this.nuages);
     this.sceneAides = new THREE.Scene();
@@ -350,6 +363,79 @@ export class CoucheMaquettes3D {
     this.carte?.triggerRepaint();
   }
 
+  // ---------------------------------------------------------------- rendu
+
+  /** Réglages du rendu (configuration, puis volet Vue 3D) : lumières, exposition, arêtes. */
+  definirRendu(r) {
+    const avant = this.rendu;
+    this.rendu = { ...this.rendu, ...r };
+    this.matAretes.color.set(this.rendu.couleur_aretes);
+    this.matAretes.opacity = this.rendu.opacite_aretes;
+    this._appliquerLumieres();
+    if (avant.aretes !== this.rendu.aretes || avant.angle_aretes_deg !== this.rendu.angle_aretes_deg) {
+      for (const id of this.modeles.keys()) this._aretes(id);
+    }
+    this.surRendu();
+    this.carte?.triggerRepaint();
+  }
+
+  _appliquerLumieres() {
+    if (!this.lumCiel) return;
+    const c = this.rendu.contraste_lumiere;
+    this.lumCiel.intensity = Math.max(0.2, 1.55 - 0.55 * c);
+    this.lumCle.intensity = 2.2 * c;
+    this.lumAppoint.intensity = 0.35 + 0.25 * c;
+    if (this.renderer) this.renderer.toneMappingExposure = this.rendu.exposition;
+  }
+
+  /** Arêtes vives des objets visibles d'une maquette (trait fin), calculées maillage par maillage sans figer
+   *  l'interface ; recalculées quand les filtres changent. Pas d'arêtes au-delà du plafond de triangles. */
+  async _aretes(id) {
+    const m = this.modeles.get(id);
+    if (!m?.groupe) return;
+    const jeton = (m.jetonAretes = (m.jetonAretes || 0) + 1);
+    const maillages = [];
+    m.groupe.traverse((o) => { if (o.isMesh && o.geometry.userData.plages) maillages.push(o); });
+    for (const o of maillages) for (const a of o.children.filter((x) => x.userData.aretes)) { o.remove(a); a.geometry.dispose(); }
+    const triangles = maillages.reduce((t, o) => t + (o.geometry.userData.indexOrigine || o.geometry.index).count / 3, 0);
+    if (!this.rendu.aretes || triangles > this.rendu.aretes_max_triangles_millions * 1e6) { this.carte?.triggerRepaint(); return; }
+    for (const o of maillages) {
+      const g = o.geometry;
+      const n = Math.min(g.index.count, Number.isFinite(g.drawRange.count) ? g.drawRange.count : g.index.count);
+      if (!n) continue;
+      // paquets d'objets entiers (≤ ARETES_PAQUET triangles) : une arête n'est jamais coupée entre deux paquets,
+      // et la page reste fluide (une image entre deux paquets)
+      const plages = g.userData.plagesVisibles || g.userData.plages;
+      const nbTri = n / 3;
+      const morceaux = [];
+      let debut = 0;
+      for (let i = 2; i <= plages.length; i += 2) {
+        const fin = i < plages.length ? plages[i] : nbTri;
+        if (fin - debut >= ARETES_PAQUET || i === plages.length) {
+          await new Promise((r) => { requestAnimationFrame(r); });
+          if (m.jetonAretes !== jeton || !this.modeles.has(id)) return;
+          const tmp = new THREE.BufferGeometry();
+          tmp.setAttribute('position', g.getAttribute('position'));
+          tmp.setIndex(new THREE.BufferAttribute(g.index.array.subarray(debut * 3, fin * 3), 1));
+          morceaux.push(new THREE.EdgesGeometry(tmp, this.rendu.angle_aretes_deg).getAttribute('position').array);
+          debut = fin;
+        }
+      }
+      const tout = new Float32Array(morceaux.reduce((t, x) => t + x.length, 0));
+      let k = 0;
+      for (const x of morceaux) { tout.set(x, k); k += x.length; }
+      const geoAretes = new THREE.BufferGeometry();
+      geoAretes.setAttribute('position', new THREE.BufferAttribute(tout, 3));
+      const lignes = new THREE.LineSegments(geoAretes, this.matAretes);
+      lignes.userData.aretes = true;
+      lignes.raycast = () => {};   // ni clic ni mesure sur les arêtes
+      lignes.renderOrder = 1;
+      o.add(lignes);
+      lignes.updateMatrixWorld(true);
+    }
+    this._appliquer(id);
+  }
+
   /** Lit un GLB et prépare ses matériaux (ombrage à facettes, mats, deux faces). */
   _lireGlb(url, progression) {
     return new Promise((resolve, reject) => {
@@ -361,6 +447,10 @@ export class CoucheMaquettes3D {
             mat.flatShading = true;
             if (mat.isMeshStandardMaterial) { mat.roughness = Math.max(mat.roughness, 0.75); mat.metalness = 0; }
             mat.side = THREE.DoubleSide;
+            // faces légèrement reculées : les arêtes tracées par-dessus ne scintillent pas
+            mat.polygonOffset = true;
+            mat.polygonOffsetFactor = 1;
+            mat.polygonOffsetUnits = 1;
             mat.userData.opaciteOrigine = mat.opacity;
             mat.userData.transparentOrigine = mat.transparent;
           }
@@ -385,6 +475,7 @@ export class CoucheMaquettes3D {
       this.scene.add(groupe);
       this._appliquer(id);
       this._filtrer(id);
+      this._aretes(id);
       return groupe;
     }, (err) => {
       if (this.modeles.get(id) === entree) this.modeles.delete(id);
@@ -409,6 +500,7 @@ export class CoucheMaquettes3D {
         m.groupe.updateMatrixWorld(true);
         m.detail = scene;
         this._filtrer(id);
+        this._aretes(id);
       } catch (e) {
         m.detail = null;
         return;
@@ -445,6 +537,7 @@ export class CoucheMaquettes3D {
     if (!this.modeles.has(id)) return;
     this.types.set(id, donnees);
     this._filtrer(id);
+    if (this._masques(donnees)) this._aretes(id);   // filtres déjà actifs : arêtes des seuls objets visibles
     this.surTypes();
   }
 
@@ -452,7 +545,7 @@ export class CoucheMaquettes3D {
    *  famillesColorees: Set(indice), isolee: indice de famille ou null }. */
   definirFiltres(filtres) {
     this.filtres = { ...this.filtres, ...filtres };
-    for (const id of this.modeles.keys()) this._filtrer(id);
+    for (const id of this.modeles.keys()) { this._filtrer(id); this._aretes(id); }
   }
 
   /** Récapitulatif des maquettes chargées : familles (nom, couleur, nombre d'objets) et types IFC (nombre). */
@@ -594,6 +687,7 @@ export class CoucheMaquettes3D {
     const attenue = this.isole && this.isole !== id;
     const op = m.opacite * (attenue ? 0.12 : 1) * this.attenuation;
     m.groupe.traverse((o) => {
+      if (o.userData.aretes) o.visible = op >= 0.99;   // maquette atténuée : pas d'arêtes (lisibilité)
       if (!o.isMesh) return;
       for (const mat of [o.material].flat()) {
         if (mat === this.matSelection || mat.userData.famille) continue;

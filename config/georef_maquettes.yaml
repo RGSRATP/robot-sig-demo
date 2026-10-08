@@ -23,6 +23,14 @@ affichage_3d:
                                        # au-delà, à la demande. 6 M : fluide sur une carte graphique intégrée
   zoom_emprises: 13                    # en deçà, les maquettes sont des points regroupés ; au-delà, leurs emprises
   max_emprises: 600                    # emprises dessinées au plus (les plus proches du centre de la vue)
+  rendu:                               # aspect des maquettes (modifiable aussi dans le volet Vue 3D)
+    aretes: true                       # contours des objets : arêtes vives tracées en trait fin
+    angle_aretes_deg: 30               # angle entre deux faces au-delà duquel l'arête est tracée
+    aretes_max_triangles_millions: 1.5 # maquette plus lourde : pas d'arêtes (calcul trop long dans le navigateur)
+    couleur_aretes: "#1f2328"
+    opacite_aretes: 0.4
+    exposition: 1.0                    # luminosité générale (correction de tons neutre)
+    contraste_lumiere: 1.0             # écart entre faces éclairées et faces à l'ombre (0,5 doux à 1,5 marqué)
 
 # Liste des maquettes (des milliers) : tenue à jour par différence ; le dossier n'est entièrement reparcouru
 # (nouvelles maquettes, fichiers modifiés) qu'à cet intervalle, ou par le bouton « Actualiser ».

@@ -191,6 +191,10 @@ export class GestionnaireMaquettes {
     }
     this.inventaire = inv;
     this._jeton = inv.jeton;
+    if (inv.rendu && !this._renduConfig) {   // réglages du rendu de la configuration, une fois
+      this._renduConfig = true;
+      this.c3d.definirRendu(inv.rendu);
+    }
     const signature = (m) => m && JSON.stringify([m.etat.phase, m.positionnement?.statut, m.locaux?.phase, m.locaux?.nb]);
     const ficheAvant = signature(this.maquettes.get(this.ficheOuverte));
     if (inv.complet) this.maquettes.clear();

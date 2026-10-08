@@ -125,9 +125,37 @@ function voletVue3d(conteneur, carte, c3d, maquettes, appliquerTransparence) {
       ligne('Couper au-dessus de', coupeActive, coupe, valC),
       el('p', { className: 'sig-info', textContent: 'Hauteur par rapport au terrain naturel (RGE ALTI). Les objets au-dessus sont masqués.' })),
 
+    sectionRendu(c3d),
     sectionFiltres(c3d),
   );
   return { majBornes };
+}
+
+/** Section « Rendu » : arêtes, luminosité, contraste (valeurs de la configuration, puis réglées ici). */
+function sectionRendu(c3d) {
+  const zone = el('div');
+  const maj = () => {
+    const r = c3d.rendu;
+    const aretes = el('input', { type: 'checkbox', checked: r.aretes });
+    aretes.addEventListener('change', () => c3d.definirRendu({ aretes: aretes.checked }));
+    const curseur = (libelle, cle, min, max, pas) => {
+      const i = el('input', { type: 'range', min, max, step: pas, value: r[cle] });
+      const o = el('output', { textContent: Number(r[cle]).toLocaleString('fr-FR') });
+      i.addEventListener('input', () => { o.textContent = Number(i.value).toLocaleString('fr-FR'); c3d.definirRendu({ [cle]: Number(i.value) }); });
+      return el('div', { className: 'sig-reglage' }, el('span', { className: 'sig-reglage__libelle', textContent: libelle }), i, o);
+    };
+    zone.replaceChildren(
+      el('label', { className: 'sig-option' }, aretes, ' Arêtes des objets (contours)'),
+      curseur('Opacité des arêtes', 'opacite_aretes', 0.1, 1, 0.05),
+      curseur('Luminosité', 'exposition', 0.5, 1.8, 0.05),
+      curseur('Contraste de l’éclairage', 'contraste_lumiere', 0.5, 1.6, 0.05),
+      el('p', { className: 'sig-info', textContent: `Arêtes calculées pour les maquettes de moins de ${Number(r.aretes_max_triangles_millions).toLocaleString('fr-FR')} million(s) de triangles.` }));
+  };
+  // la configuration arrive avec la liste des maquettes : le volet se met à jour
+  const prec = c3d.surRendu;
+  c3d.surRendu = () => { prec(); if (!zone.contains(document.activeElement)) maj(); };
+  maj();
+  return el('section', { className: 'sig-section' }, el('h3', { textContent: 'Rendu' }), zone);
 }
 
 // ---------------------------------------------------------------- contrôles de carte
