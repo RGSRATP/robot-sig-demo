@@ -7,12 +7,13 @@ import './carte.css';
 import { lire } from './api.js';
 import { GestionnaireCouches } from './couches.js';
 import { sectionMaquette, sectionObjet } from './croisement.js';
-import { fermerFiche, monterFiche } from './fiche.js';
+import { afficherBatiment, fermerFiche, monterFiche } from './fiche.js';
 import { versLambert93 } from './lambert93.js';
 import { GestionnaireLocaux } from './locaux.js';
 import { GestionnaireMaquettes } from './maquettes.js';
 import { auSol } from './camera.js';
 import { GestionnaireRelief, idsRelief, styleRelief } from './relief.js';
+import { GestionnaireBatiments, SOURCE_BATIMENTS, styleBatiments } from './batiments.js';
 import { sectionFiltres } from './filtres.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
@@ -45,6 +46,7 @@ function styleInitial(cfg) {
   }
   const style = { version: 8, sources, layers };
   styleRelief(cfg.relief, style);   // altitudes et ombrage, sous les couches SIG
+  styleBatiments(cfg.batiments, style);
   if (cfg.glyphes) style.glyphs = cfg.glyphes;   // police des étiquettes (codes des locaux, noms des maquettes)
   return style;
 }
@@ -103,7 +105,13 @@ function voletVue3d(conteneur, carte, c3d, maquettes, appliquerTransparence) {
       el('p', { className: 'sig-info', textContent: 'Clic droit + glisser (ou Ctrl + glisser) pour incliner et tourner la vue.' })),
     el('section', { className: 'sig-section' }, el('h3', { textContent: 'Sous-sol' }),
       ligne('Transparence du fond de carte', transparence, valT),
-      el('p', { className: 'sig-info', textContent: 'Rend le fond translucide pour lire les ouvrages enterrés sous la ville.' })),
+      el('p', { className: 'sig-info', textContent: 'Rend le fond translucide pour lire les ouvrages enterrés sous la ville.' }),
+      (() => {
+        const i = el('input', { type: 'checkbox', checked: c3d.aTravers });
+        i.addEventListener('change', () => c3d.definirATravers(i.checked));
+        return el('label', { className: 'sig-option' }, i, ' Voir les ouvrages à travers le terrain et les bâtiments');
+      })(),
+      el('p', { className: 'sig-info', textContent: 'Avec le relief ou les bâtiments 3D : sans cette option, ils cachent tunnels et sous-sols.' })),
     el('section', { className: 'sig-section' }, el('h3', { textContent: 'Coupe horizontale' }),
       ligne('Couper au-dessus de', coupeActive, coupe, valC),
       el('p', { className: 'sig-info', textContent: 'Hauteur par rapport au terrain naturel (RGE ALTI). Les objets au-dessus sont masqués.' })),
@@ -208,7 +216,15 @@ export async function monterCarte(conteneur) {
   // Relief indisponible : la carte reste plate là où les altitudes manquent, un message l'indique.
   const sourcesRelief = new Set((cfg.relief?.sources || []).flatMap((s) => Object.values(idsRelief(s.id))));
   let echecsRelief = 0;
+  let echecsBatiments = 0;
   carte.on('error', (e) => {
+    if (e.sourceId === SOURCE_BATIMENTS) {
+      echecsBatiments += 1;
+      if (echecsBatiments === SEUIL_ECHECS_FOND) {
+        message.montrer(`Bâtiments 3D indisponibles (${e.error?.message || 'tuiles BD TOPO injoignables'}). Le reste de la carte est utilisable.`);
+      }
+      return;
+    }
     if (e.sourceId && sourcesRelief.has(e.sourceId)) {
       echecsRelief += 1;
       if (echecsRelief === SEUIL_ECHECS_FOND) {
@@ -225,6 +241,7 @@ export async function monterCarte(conteneur) {
   });
   carte.on('data', (e) => {
     if (sourcesRelief.has(e.sourceId) && e.tile?.state === 'loaded') echecsRelief = 0;
+    if (e.sourceId === SOURCE_BATIMENTS && e.tile?.state === 'loaded') echecsBatiments = 0;
     if (e.sourceId === `fond-${fondActif}` && e.tile && e.tile.state === 'loaded') {
       echecs = 0;
       message.cacher();
@@ -284,9 +301,15 @@ export async function monterCarte(conteneur) {
     surChangement: (actif) => { c3d.definirRelief(actif); auSol(carte); },
   });
   if (relief) {
-    pFonds.append(relief.section({ aTravers: c3d.aTravers, surATravers: (v) => c3d.definirATravers(v) }));
+    pFonds.append(relief.section());
     relief.actif = cfg.relief.actif;
   }
+  // Bâtiments 3D BD TOPO : masqués sous les maquettes affichées en 3D
+  const batiments = cfg.batiments && new GestionnaireBatiments(carte, cfg.batiments, {
+    emprises3d: () => maquettes.emprises3d(),
+    surChangement: (visibles) => c3d.definirBatiments(visibles),
+  });
+  if (batiments) pFonds.append(batiments.section());
   function majBadge() {
     const n = (couches.inventaire?.anomalies.length || 0) + (maquettes.nbAnomalies || 0);
     g.badge('anomalies', n, true);
@@ -310,9 +333,18 @@ export async function monterCarte(conteneur) {
       return;
     }
     const sig = couches.objetSous(e.point);
+    batiments?.selectionner(null);
     if (sig) {
       maquettes.deselectionner();
       couches.ouvrirObjet(sig.id, sig.n);
+      return;
+    }
+    const bat = batiments?.sous(e.point);
+    if (bat) {
+      couches.deselectionner(false);
+      maquettes.deselectionner();
+      batiments.selectionner(bat.id);
+      afficherBatiment(bat.proprietes, cfg.batiments, () => batiments.selectionner(null));
       return;
     }
     const emprise = maquettes.empriseSous(e.point);
@@ -336,13 +368,14 @@ export async function monterCarte(conteneur) {
     maquettes.zoomerObjet();
   });
   carte.on('mousemove', (e) => {
-    const touche = couches.objetSous(e.point) || maquettes.empriseSous(e.point)
+    const touche = couches.objetSous(e.point) || maquettes.empriseSous(e.point) || batiments?.sous(e.point)
       || carte.queryRenderedFeatures(e.point, { layers: ['sig-maquettes-groupes'].filter((c) => carte.getLayer(c)) }).length;
     carte.getCanvas().style.cursor = touche ? 'pointer' : '';
   });
 
   const demarrer = async () => {
     if (relief) { relief.appliquer(); relief.majCase(); }
+    if (batiments) batiments.appliquer();
     await couches.demarrer();
     await maquettes.demarrer(cfg.police);
   };

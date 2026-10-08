@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -57,6 +58,8 @@ def _controler(cfg: dict, chemin: Path) -> dict:
 
     if cfg.get("relief") is not None:
         _controler_relief(cfg["relief"], erreur)
+    if cfg.get("batiments") is not None:
+        _controler_batiments(cfg["batiments"], erreur)
 
     if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
         raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")
@@ -154,6 +157,51 @@ def _controler_relief(relief, erreur) -> None:
             raise erreur(f"« relief.sources.{nom}.secours » doit désigner une autre source de « relief.sources »")
 
 
+COULEUR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _controler_batiments(b, erreur) -> None:
+    """Section « batiments » (facultative) : tuiles vectorielles BD TOPO extrudées, appelées par le navigateur."""
+    if not isinstance(b, dict):
+        raise erreur("« batiments » doit être une section (url, couche_source, champ_hauteur…)")
+    url = b.get("url")
+    if not isinstance(url, str) or not all(p in url for p in ("{z}", "{x}", "{y}")):
+        raise erreur("« batiments.url » doit contenir {z}, {x} et {y} (tuiles vectorielles)")
+    for cle in ("couche_source", "champ_identifiant", "champ_hauteur", "champ_couleur"):
+        if not isinstance(b.get(cle), str) or not b[cle]:
+            raise erreur(f"« batiments.{cle} » doit être un nom (texte)")
+    for cle in ("zoom_min", "zoom_max_tuiles"):
+        z = b.get(cle)
+        if not isinstance(z, int) or isinstance(z, bool) or not 0 <= z <= 22:
+            raise erreur(f"« batiments.{cle} » doit être un entier entre 0 et 22")
+    if b["zoom_max_tuiles"] < b["zoom_min"]:
+        raise erreur("« batiments.zoom_max_tuiles » doit être supérieur ou égal à « zoom_min »")
+    for cle in ("visible", "masquer_sous_maquettes"):
+        if not isinstance(b.get(cle), bool):
+            raise erreur(f"« batiments.{cle} » doit valoir true ou false")
+    o = b.get("opacite")
+    if not _nombre(o) or o > 1:
+        raise erreur("« batiments.opacite » doit être un nombre entre 0 et 1")
+    if not _nombre(b.get("hauteur_defaut_m")):
+        raise erreur("« batiments.hauteur_defaut_m » doit être un nombre positif")
+    couleurs = b.get("couleurs")
+    if not isinstance(couleurs, dict) or not all(isinstance(v, str) and COULEUR.match(v) for v in couleurs.values()):
+        raise erreur("« batiments.couleurs » doit associer chaque valeur à une couleur #rrvvbb")
+    if not isinstance(b.get("couleur_defaut"), str) or not COULEUR.match(b["couleur_defaut"]):
+        raise erreur("« batiments.couleur_defaut » doit être une couleur #rrvvbb")
+    if not isinstance(b.get("champs_fiche", []), list):
+        raise erreur("« batiments.champs_fiche » doit être une liste de champs")
+
+
+def config_batiments(cfg: dict) -> dict | None:
+    """Bâtiments 3D pour l'interface (None si la section est absente)."""
+    b = cfg.get("batiments")
+    if not b:
+        return None
+    return {**b, "libelle": b.get("libelle", "Bâtiments 3D"), "attribution": b.get("attribution", ""),
+            "champs_fiche": b.get("champs_fiche", [])}
+
+
 def config_relief(cfg: dict) -> dict | None:
     """Relief pour l'interface (None si la section est absente)."""
     r = cfg.get("relief")
@@ -246,6 +294,7 @@ def config_carte(cfg: dict) -> dict:
         "hauteur_coupe_plan_m": cfg["carte"]["hauteur_coupe_plan_m"],
         "police": cfg["carte"].get("police"),
         "relief": config_relief(cfg),
+        "batiments": config_batiments(cfg),
         "fonds": [
             {
                 "id": nom,

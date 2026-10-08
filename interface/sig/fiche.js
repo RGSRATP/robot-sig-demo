@@ -97,6 +97,23 @@ export function afficherFiche(fiche, couche, fermeture, complements = []) {
   ], fermeture);
 }
 
+// ---------------------------------------------------------------- bâtiment BD TOPO
+
+/** Fiche d'un bâtiment des tuiles BD TOPO : attributs choisis en tête (config « champs_fiche »), puis tous. */
+export function afficherBatiment(proprietes, cfg, fermeture) {
+  if (!panneau) return;
+  const valeur = (v) => (typeof v === 'number' ? nombre(v) : String(v));
+  const tete = cfg.champs_fiche.filter((k) => proprietes[k] != null && proprietes[k] !== '')
+    .map((k) => [k.replace(/_([dl])_/g, ' $1’').replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase()), valeur(proprietes[k])]);
+  const usage = proprietes[cfg.champ_couleur];
+  montrer([
+    entete(usage ? `Bâtiment · ${usage}` : 'Bâtiment', cfg.libelle, 'BD TOPO'),
+    liste(tete),
+    el('h4', { textContent: `Attributs (${Object.keys(proprietes).length})` }),
+    tableau(proprietes),
+  ], fermeture);
+}
+
 // ---------------------------------------------------------------- maquette
 
 const PHASES = { pret: 'traitée', en_cours: 'traitement en cours', en_attente: 'en attente de traitement', erreur: 'erreur de traitement' };

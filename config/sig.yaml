@@ -41,6 +41,35 @@ relief:
       attribution: "© IGN LiDAR HD"
       secours: rgealti      # pixels sans donnée complétés par cette source
 
+# Bâtiments 3D (lot 5) : BD TOPO de l'IGN en tuiles vectorielles, appelées par le navigateur, extrudées à leur
+# hauteur. Section absente : pas de bâtiments 3D.
+batiments:
+  libelle: "Bâtiments 3D (BD TOPO, IGN)"
+  url: "https://data.geopf.fr/tms/1.0.0/BDTOPO/{z}/{x}/{y}.pbf"
+  couche_source: "batiment"          # couche des tuiles
+  attribution: "© IGN BD TOPO"
+  zoom_min: 15                       # les tuiles ne contiennent les bâtiments qu'à partir du zoom 15
+  zoom_max_tuiles: 18                # tuiles demandées jusqu'à ce zoom, agrandies au-delà
+  visible: false                     # affichés à l'ouverture
+  opacite: 0.85
+  champ_identifiant: "cleabs"        # identifiant unique (sélection, masquage)
+  champ_hauteur: "hauteur"           # mètres
+  hauteur_defaut_m: 3                # hauteur inconnue
+  masquer_sous_maquettes: true       # bâtiments sous une maquette affichée en 3D masqués (gares reconstruites…)
+  champ_couleur: "usage_1"
+  couleurs:
+    "Résidentiel": "#d8c9b0"
+    "Commercial et services": "#d0a77c"
+    "Industriel": "#a9adbd"
+    "Agricole": "#b8c79a"
+    "Religieux": "#c5a3c9"
+    "Sportif": "#97c3c8"
+    "Annexe": "#d9d9d9"
+  couleur_defaut: "#cdc6ba"          # « Indifférencié » et usages non listés
+  # attributs affichés en tête de fiche (les autres suivent dans le tableau)
+  champs_fiche: ["nature", "usage_1", "usage_2", "hauteur", "nombre_d_etages", "nombre_de_logements",
+                 "date_d_apparition", "materiaux_des_murs", "materiaux_de_la_toiture", "etat_de_l_objet", "identifiants_rnb"]
+
 donnees:
   dossier_sig: "donnees/sig"   # relatif à la racine du projet ; parcouru avec ses sous-dossiers
 

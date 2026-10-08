@@ -128,3 +128,42 @@ def test_relief_tuile_reelle(source):
     assert r.status_code == 200 and len(r.content) == 256 * 256 * 4, r.text[:200]
     h = struct.unpack("<65536f", r.content)
     assert 40 < min(h) and max(h) < 200   # altitudes NGF plausibles autour de Massy
+
+
+# ---------------------------------------------------------------- bâtiments 3D (lot 5)
+
+def test_batiments_du_depot_exposes_a_l_interface():
+    b = cfg_sig.config_carte(cfg_sig.charger_config())["batiments"]
+    assert "data.geopf.fr" in b["url"] and b["couche_source"] == "batiment"
+    assert b["zoom_min"] <= b["zoom_max_tuiles"] and b["champ_hauteur"] == "hauteur"
+
+
+def _config_batiments(tmp_path, section: str):
+    import yaml
+    cfg = yaml.safe_load(cfg_sig.CHEMIN_CONFIG.read_text(encoding="utf-8"))
+    cfg.pop("batiments", None)
+    p = tmp_path / "sig.yaml"
+    p.write_text(yaml.safe_dump(cfg, allow_unicode=True) + section, encoding="utf-8")
+    return p
+
+
+def test_batiments_facultatifs(tmp_path):
+    assert cfg_sig.config_carte(cfg_sig.charger_config(_config_batiments(tmp_path, "")))["batiments"] is None
+
+
+BAT = ("batiments: {{url: '{url}', couche_source: batiment, champ_identifiant: cleabs, champ_hauteur: hauteur, "
+       "champ_couleur: usage_1, zoom_min: {zmin}, zoom_max_tuiles: 18, visible: false, masquer_sous_maquettes: true, "
+       "opacite: {op}, hauteur_defaut_m: 3, couleurs: {{Résidentiel: '{coul}'}}, couleur_defaut: '#cdc6ba'}}\n")
+OK = dict(url="https://x/{z}/{x}/{y}.pbf", zmin=15, op=0.85, coul="#d8c9b0")
+
+
+@pytest.mark.parametrize("modif, attendu", [
+    (dict(url="https://x/tuiles.pbf"), "url"),
+    (dict(zmin=19), "zoom_max_tuiles"),
+    (dict(op=2), "opacite"),
+    (dict(coul="beige"), "couleurs"),
+])
+def test_batiments_incomplets_message_clair(tmp_path, modif, attendu):
+    cfg_sig.charger_config(_config_batiments(tmp_path, BAT.format(**OK)))   # la base est valide
+    with pytest.raises(cfg_sig.ConfigInvalide, match=attendu):
+        cfg_sig.charger_config(_config_batiments(tmp_path, BAT.format(**{**OK, **modif})))

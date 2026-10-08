@@ -129,7 +129,7 @@ export class GestionnaireRelief {
   }
 
   /** Section « Relief » du volet des fonds. */
-  section({ aTravers, surATravers }) {
+  section() {
     const r = this.cfg;
     const coche = (libelle, valeur, changer) => {
       const i = el('input', { type: 'checkbox', checked: valeur });
@@ -138,12 +138,11 @@ export class GestionnaireRelief {
     };
     const actif = coche('Afficher le relief (terrain 3D)', this.actif, (v) => { this.actif = v; this.appliquer(); maj(); });
     const ombrage = coche('Ombrage du relief', this.ombrage, (v) => { this.ombrage = v; this.appliquer(); });
-    const travers = coche('Voir les ouvrages à travers le terrain', aTravers, surATravers);
     const choix = el('select', {},
       ...r.sources.map((s) => el('option', { value: s.id, textContent: s.libelle, selected: s.id === this.source })));
     choix.addEventListener('change', () => { this.source = choix.value; this.appliquer(); });
     const maj = () => {
-      for (const x of [ombrage.i, travers.i, choix]) x.disabled = !this.actif;
+      for (const x of [ombrage.i, choix]) x.disabled = !this.actif;
       actif.i.checked = this.actif;
     };
     maj();
@@ -151,8 +150,8 @@ export class GestionnaireRelief {
     return el('section', { className: 'sig-section' }, el('h3', { textContent: 'Relief' }),
       el('div', { className: 'sig-options sig-options--colonne' }, actif.ligne),
       el('div', { className: 'sig-reglage' }, el('span', { className: 'sig-reglage__libelle', textContent: 'Modèle de terrain' }), choix),
-      el('div', { className: 'sig-options sig-options--colonne' }, ombrage.ligne, travers.ligne),
+      el('div', { className: 'sig-options sig-options--colonne' }, ombrage.ligne),
       el('p', { className: 'sig-info', textContent: 'Altitudes NGF de la Géoplateforme IGN. Le relief se voit en vue inclinée (bouton 3D). '
-        + 'Les maquettes y sont placées à leur altitude NGF ; le terrain masque les ouvrages enterrés, sauf avec « voir à travers ».' }));
+        + 'Les maquettes y sont placées à leur altitude NGF ; le terrain masque les ouvrages enterrés, sauf avec « Voir les ouvrages à travers » (volet Vue 3D).' }));
   }
 }

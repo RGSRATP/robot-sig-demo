@@ -66,7 +66,8 @@ export class CoucheMaquettes3D {
     this.reference = null;      // MercatorCoordinate commune
     this.coupe = null;          // hauteur (m au-dessus du terrain) au-dessus de laquelle on coupe
     this.relief = false;        // relief affiché : scène en altitudes NGF
-    this.aTravers = true;       // relief : ouvrages dessinés à travers le terrain (sous-sols visibles)
+    this.aTravers = true;       // ouvrages dessinés à travers le terrain et les bâtiments 3D (sous-sols visibles)
+    this.batiments = false;     // bâtiments 3D affichés (ils occultent, comme le terrain)
     this.selection = null;      // { id, guid, meshes, materiaux }
     this.isole = null;          // id de la maquette isolée
     this.attenuation = 1;       // facteur d'opacité commun (plan des locaux : maquettes atténuées)
@@ -124,8 +125,8 @@ export class CoucheMaquettes3D {
       this.renderer.clippingPlanes = [];
     }
     this.renderer.resetState();
-    // relief : le terrain est dans le tampon de profondeur et cacherait les ouvrages enterrés
-    if (this.relief && this.aTravers) this.renderer.clearDepth();
+    // terrain et bâtiments 3D sont dans le tampon de profondeur et cacheraient les ouvrages enterrés
+    if (this.aTravers && (this.relief || this.batiments)) this.renderer.clearDepth();
     this.renderer.render(this.scene, this.camera);
     this._placerEtiquettes();
   }
@@ -254,7 +255,13 @@ export class CoucheMaquettes3D {
     this.carte?.triggerRepaint();
   }
 
-  /** Relief : ouvrages dessinés à travers le terrain (true) ou masqués par lui. */
+  /** Bâtiments 3D affichés ou non (occultation des ouvrages). */
+  definirBatiments(visibles) {
+    this.batiments = visibles;
+    this.carte?.triggerRepaint();
+  }
+
+  /** Ouvrages dessinés à travers le terrain et les bâtiments (true) ou masqués par eux. */
   definirATravers(actif) {
     this.aTravers = actif;
     this.carte?.triggerRepaint();

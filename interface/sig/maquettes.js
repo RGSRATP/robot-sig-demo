@@ -272,6 +272,7 @@ export class GestionnaireMaquettes {
     this._zone = zone;
     for (const f of r.features) f.properties.nom = this.maquettes.get(f.properties.id)?.nomCourt || '';
     this.carte.getSource('sig-maquettes').setData(r);
+    this.emprisesZone = r;
     for (const id of this.affichees) {
       this.carte.setFeatureState({ source: 'sig-maquettes', id }, { charge: this.c3d.estCharge(id) });
     }
@@ -468,6 +469,14 @@ export class GestionnaireMaquettes {
   }
 
   /** Hauteurs (m / terrain) couvertes par les maquettes chargées, pour la coupe horizontale. */
+  /** Emprises (GeoJSON WGS84) des maquettes affichées en 3D dans la zone : masquage des bâtiments BD TOPO. */
+  emprises3d() {
+    return (this.emprisesZone?.features || [])
+      .filter((f) => this.affichees.has(f.properties.id) && this.c3d.estCharge(f.properties.id)
+        && this.c3d.modeles.get(f.properties.id)?.visible !== false)
+      .map((f) => f.geometry);
+  }
+
   hauteurs() {
     let bas = Infinity;
     let haut = -Infinity;
