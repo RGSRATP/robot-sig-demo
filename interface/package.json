@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "copc": "0.0.9",
+    "laz-perf": "0.0.7",
     "maplibre-gl": "6.12.0",
     "three": "0.180.0"
   },

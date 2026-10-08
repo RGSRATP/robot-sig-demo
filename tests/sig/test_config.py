@@ -167,3 +167,43 @@ def test_batiments_incomplets_message_clair(tmp_path, modif, attendu):
     cfg_sig.charger_config(_config_batiments(tmp_path, BAT.format(**OK)))   # la base est valide
     with pytest.raises(cfg_sig.ConfigInvalide, match=attendu):
         cfg_sig.charger_config(_config_batiments(tmp_path, BAT.format(**{**OK, **modif})))
+
+
+# ---------------------------------------------------------------- nuage LiDAR HD (lot 5)
+
+def test_lidar_du_depot_expose_a_l_interface():
+    li = cfg_sig.config_carte(cfg_sig.charger_config())["lidar"]
+    assert "data.geopf.fr" in li["wfs_dalles"] and li["systeme"] == "EPSG:2154"
+    codes = {c["code"]: c for c in li["classes"]}
+    assert codes[2]["libelle"] == "Sol" and codes[2]["visible"] is True and codes[65]["visible"] is False
+
+
+def _config_lidar(tmp_path, section: str):
+    import yaml
+    cfg = yaml.safe_load(cfg_sig.CHEMIN_CONFIG.read_text(encoding="utf-8"))
+    cfg.pop("lidar", None)
+    p = tmp_path / "sig.yaml"
+    p.write_text(yaml.safe_dump(cfg, allow_unicode=True) + section, encoding="utf-8")
+    return p
+
+
+def test_lidar_facultatif(tmp_path):
+    assert cfg_sig.config_carte(cfg_sig.charger_config(_config_lidar(tmp_path, "")))["lidar"] is None
+
+
+LID = ("lidar: {{wfs_dalles: '{wfs}', champ_url: url_npl, systeme: 'EPSG:2154', zoom_min: 16, max_dalles: 4, "
+       "budget_points: {budget}, taille_point_px: 2, couleur: {couleur}, classes: {{2: {{libelle: Sol, couleur: '{coul}'}}}}, "
+       "couleur_autres_classes: '#999999'}}\n")
+OKL = dict(wfs="https://x/wfs?BBOX={sud},{ouest},{nord},{est}", budget=3000000, couleur="classe", coul="#a8875c")
+
+
+@pytest.mark.parametrize("modif, attendu", [
+    (dict(wfs="https://x/wfs?BBOX={bbox}"), "wfs_dalles"),
+    (dict(budget=0), "budget_points"),
+    (dict(couleur="arc-en-ciel"), "couleur"),
+    (dict(coul="marron"), "classes"),
+])
+def test_lidar_incomplet_message_clair(tmp_path, modif, attendu):
+    cfg_sig.charger_config(_config_lidar(tmp_path, LID.format(**OKL)))   # la base est valide
+    with pytest.raises(cfg_sig.ConfigInvalide, match=attendu):
+        cfg_sig.charger_config(_config_lidar(tmp_path, LID.format(**{**OKL, **modif})))

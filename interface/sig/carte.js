@@ -14,6 +14,7 @@ import { GestionnaireMaquettes } from './maquettes.js';
 import { auSol } from './camera.js';
 import { GestionnaireRelief, idsRelief, styleRelief } from './relief.js';
 import { GestionnaireBatiments, SOURCE_BATIMENTS, styleBatiments } from './batiments.js';
+import { GestionnaireLidar } from './lidar.js';
 import { sectionFiltres } from './filtres.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
@@ -310,6 +311,13 @@ export async function monterCarte(conteneur) {
     surChangement: (visibles) => c3d.definirBatiments(visibles),
   });
   if (batiments) pFonds.append(batiments.section());
+  // Nuage de points LiDAR HD : altitudes NGF, le relief est affiché avec lui
+  const lidar = cfg.lidar && new GestionnaireLidar(carte, c3d, cfg.lidar, {
+    avantActivation: () => {
+      if (relief && !relief.actif) { relief.actif = true; relief.appliquer(); relief.majCase(); }
+    },
+  });
+  if (lidar) pFonds.append(lidar.section());
   function majBadge() {
     const n = (couches.inventaire?.anomalies.length || 0) + (maquettes.nbAnomalies || 0);
     g.badge('anomalies', n, true);

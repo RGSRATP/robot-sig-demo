@@ -70,6 +70,37 @@ batiments:
   champs_fiche: ["nature", "usage_1", "usage_2", "hauteur", "nombre_d_etages", "nombre_de_logements",
                  "date_d_apparition", "materiaux_des_murs", "materiaux_de_la_toiture", "etat_de_l_objet", "identifiants_rnb"]
 
+# Nuage de points LiDAR HD (lot 5) : dalles de 1 km² de l'IGN au format COPC (LAZ « cloud optimized »), listées par
+# le service WFS de la Géoplateforme et lues par morceaux par le navigateur (seuls les niveaux de détail utiles).
+# Coordonnées Lambert 93, altitudes IGN69 (NGF). Section absente : pas de nuage de points.
+lidar:
+  # {sud}, {ouest}, {nord}, {est} : emprise affichée en degrés (WGS84)
+  wfs_dalles: "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=IGNF_LIDAR-HD_METADONNEE:metadata&OUTPUTFORMAT=application/json&SRSNAME=EPSG:4326&PROPERTYNAME=url_npl,nombre_points,date_fin_acquisition,geom&COUNT=50&BBOX={sud},{ouest},{nord},{est},urn:ogc:def:crs:EPSG::4326"
+  champ_url: "url_npl"             # lien de la dalle COPC
+  champ_date: "date_fin_acquisition"
+  systeme: "EPSG:2154"             # système attendu des points ; une dalle déclarant un autre système est ignorée et signalée
+  attribution: "© IGN LiDAR HD"
+  zoom_min: 16                     # en dessous, le nuage n'est pas chargé
+  max_dalles: 4                    # dalles chargées en même temps (les plus proches du centre)
+  budget_points: 2000000           # points affichés au plus (toutes dalles) ; le serveur IGN limite les lectures
+                                   # (~1 par seconde, ~60 000 points chacune) : plus de points = chargement plus long
+  taille_point_px: 2
+  couleur: "classe"                # classe | altitude | rgb (couleurs réelles, si la dalle en a)
+  classes:                         # classification du LiDAR HD (IGN)
+    1: { libelle: "Non classé", couleur: "#b8b8b8", visible: false }
+    2: { libelle: "Sol", couleur: "#a8875c" }
+    3: { libelle: "Végétation basse", couleur: "#c6e08f" }
+    4: { libelle: "Végétation moyenne", couleur: "#79b85a" }
+    5: { libelle: "Végétation haute", couleur: "#2f7d32" }
+    6: { libelle: "Bâtiment", couleur: "#d0604f" }
+    9: { libelle: "Eau", couleur: "#3d8fd6" }
+    17: { libelle: "Pont", couleur: "#e3a33b" }
+    64: { libelle: "Sursol pérenne", couleur: "#9a62b5" }
+    65: { libelle: "Artefacts", couleur: "#dddddd", visible: false }
+    66: { libelle: "Points virtuels", couleur: "#7a7a7a", visible: false }
+    67: { libelle: "Divers - bâtis", couleur: "#c98a7a" }
+  couleur_autres_classes: "#999999"
+
 donnees:
   dossier_sig: "donnees/sig"   # relatif à la racine du projet ; parcouru avec ses sous-dossiers
 

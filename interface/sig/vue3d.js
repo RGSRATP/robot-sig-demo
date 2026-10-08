@@ -87,6 +87,7 @@ export class CoucheMaquettes3D {
     this.filtres = { typesMasques: new Set(), famillesMasquees: new Set(), famillesColorees: new Set(), isolee: null };
     this.matsFamilles = new Map();
     this.surTypes = () => {};
+    this.nuages = new THREE.Group();   // nuages de points LiDAR (lidar.js), un groupe par dalle ; ajouté à la scène dans onAdd
   }
 
   onAdd(carte, gl) {
@@ -101,6 +102,7 @@ export class CoucheMaquettes3D {
     this.renderer.autoClear = false;
     this.renderer.localClippingEnabled = true;
     this.planCoupe = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+    this.scene.add(this.nuages);
   }
 
   onRemove() {
@@ -109,7 +111,7 @@ export class CoucheMaquettes3D {
   }
 
   render(gl, args) {
-    if (!this.reference || (!this.modeles.size && !this.plan)) return;
+    if (!this.reference || (!this.modeles.size && !this.plan && !this.nuages.children.length)) return;
     const principale = new THREE.Matrix4().fromArray(args.defaultProjectionData.mainMatrix);
     const r = this.reference;
     const s = this.echelleRef;
@@ -213,6 +215,8 @@ export class CoucheMaquettes3D {
   /** Altitude du terrain ajoutée à la scène pour une maquette : 0 sur la carte plate ; en relief, altitude
    *  du terrain au centre de la maquette (serveur), à défaut celle du relief affiché à son origine. */
   _sol(affichage) {
+    // nuage LiDAR : altitudes NGF dans le fichier ; carte plate : abaissé de l'altitude moyenne du sol de la dalle
+    if (affichage.nuage) return this.relief ? 0 : -(affichage.sol || 0);
     if (!this.relief) return 0;
     if (affichage.altitude_terrain != null) return affichage.altitude_terrain;
     return this.carte?.queryTerrainElevation(affichage.origine) ?? 0;
@@ -247,11 +251,32 @@ export class CoucheMaquettes3D {
       m.groupe.matrix.copy(this._matrice(m.affichage));
       m.groupe.updateMatrixWorld(true);
     }
+    for (const g of this.nuages.children) {
+      g.matrix.copy(this.matriceNuage(g.userData.affichage));
+      g.updateMatrixWorld(true);
+    }
     if (this.plan) {
       this.plan.groupe.matrix.copy(this._matrice(this.plan.affichage, false));
       this.plan.groupe.updateMatrixWorld(true);
       for (const et of this.etiquettes?.liste || []) et.point.copy(et.local).applyMatrix4(this.plan.groupe.matrix);
     }
+    this.carte?.triggerRepaint();
+  }
+
+  /** Matrice d'une dalle LiDAR (mètres depuis son coin sud-ouest, altitudes NGF) → scène. */
+  matriceNuage(affichage) {
+    return this._matrice(affichage, false);
+  }
+
+  ajouterNuage(groupe) {
+    groupe.matrix.copy(this.matriceNuage(groupe.userData.affichage));
+    groupe.updateMatrixWorld(true);
+    this.nuages.add(groupe);
+    this.carte?.triggerRepaint();
+  }
+
+  retirerNuage(groupe) {
+    this.nuages.remove(groupe);
     this.carte?.triggerRepaint();
   }
 

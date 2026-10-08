@@ -60,6 +60,8 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         _controler_relief(cfg["relief"], erreur)
     if cfg.get("batiments") is not None:
         _controler_batiments(cfg["batiments"], erreur)
+    if cfg.get("lidar") is not None:
+        _controler_lidar(cfg["lidar"], erreur)
 
     if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
         raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")
@@ -193,6 +195,44 @@ def _controler_batiments(b, erreur) -> None:
         raise erreur("« batiments.champs_fiche » doit être une liste de champs")
 
 
+def _controler_lidar(li, erreur) -> None:
+    """Section « lidar » (facultative) : dalles COPC listées par WFS, lues par le navigateur."""
+    if not isinstance(li, dict):
+        raise erreur("« lidar » doit être une section (wfs_dalles, champ_url, classes…)")
+    wfs = li.get("wfs_dalles")
+    if not isinstance(wfs, str) or not all(f"{{{k}}}" in wfs for k in ("sud", "ouest", "nord", "est")):
+        raise erreur("« lidar.wfs_dalles » doit contenir {sud}, {ouest}, {nord} et {est} (emprise affichée)")
+    for cle in ("champ_url", "systeme"):
+        if not isinstance(li.get(cle), str) or not li[cle]:
+            raise erreur(f"« lidar.{cle} » doit être un texte")
+    z = li.get("zoom_min")
+    if not isinstance(z, int) or isinstance(z, bool) or not 0 <= z <= 22:
+        raise erreur("« lidar.zoom_min » doit être un entier entre 0 et 22")
+    for cle in ("max_dalles", "budget_points", "taille_point_px"):
+        if not _nombre(li.get(cle), True):
+            raise erreur(f"« lidar.{cle} » doit être un nombre strictement positif")
+    if li.get("couleur") not in ("classe", "altitude", "rgb"):
+        raise erreur("« lidar.couleur » doit valoir classe, altitude ou rgb")
+    classes = li.get("classes")
+    if not isinstance(classes, dict) or not classes:
+        raise erreur("« lidar.classes » doit déclarer les classes (code: {libelle, couleur})")
+    for code, c in classes.items():
+        if not isinstance(code, int) or not isinstance(c, dict) or not isinstance(c.get("libelle"), str)                 or not isinstance(c.get("couleur"), str) or not COULEUR.match(c["couleur"]):
+            raise erreur(f"« lidar.classes.{code} » : code entier, libelle et couleur #rrvvbb attendus")
+    if not isinstance(li.get("couleur_autres_classes"), str) or not COULEUR.match(li["couleur_autres_classes"]):
+        raise erreur("« lidar.couleur_autres_classes » doit être une couleur #rrvvbb")
+
+
+def config_lidar(cfg: dict) -> dict | None:
+    """Nuage LiDAR pour l'interface (None si la section est absente)."""
+    li = cfg.get("lidar")
+    if not li:
+        return None
+    return {**li, "attribution": li.get("attribution", ""), "champ_date": li.get("champ_date"),
+            "classes": [{"code": code, "libelle": c["libelle"], "couleur": c["couleur"], "visible": c.get("visible", True)}
+                        for code, c in li["classes"].items()]}
+
+
 def config_batiments(cfg: dict) -> dict | None:
     """Bâtiments 3D pour l'interface (None si la section est absente)."""
     b = cfg.get("batiments")
@@ -295,6 +335,7 @@ def config_carte(cfg: dict) -> dict:
         "police": cfg["carte"].get("police"),
         "relief": config_relief(cfg),
         "batiments": config_batiments(cfg),
+        "lidar": config_lidar(cfg),
         "fonds": [
             {
                 "id": nom,
