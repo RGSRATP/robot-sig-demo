@@ -115,3 +115,49 @@ familles_objets:
     domaines_sgp: ["INT", "MOB_Mobiliers"]
     types_ifc: ["IfcDoor", "IfcWindow", "IfcCovering", "IfcRailing", "IfcCurtainWall", "IfcFurnishingElement",
                 "IfcFurniture"]
+
+# Carbone des maquettes (lot 5, croisements) : ORDRE DE GRANDEUR, pas un bilan réglementaire.
+# Volume de chaque objet lu dans ses propriétés (premier champ présent de « champs_volume », en m³), matériau lu dans
+# « champs_materiau », sinon déduit du nom ou du type de l'objet, sinon supposé d'après le type IFC.
+# Motifs : expressions régulières (entre apostrophes : « \b » reste une frontière de mot).
+# Facteurs : valeurs génériques INDICATIVES (kg CO2e par m³ de matériau mis en œuvre, production seule), à remplacer
+# par les données environnementales du projet (FDES / INIES, Base Empreinte de l'ADEME).
+carbone:
+  champs_volume: ["NetVolume", "Volume net", "Volume", "SGP_CT_Volume", "GrossVolume"]   # par ordre de priorité
+  champs_materiau: ["SGP_DI_Materiau", "SGP_DI_Matériau", "Matériau structurel", "Matériau", "Material", "Materiau"]
+  volume_max_objet_m3: 20000           # au-delà : volume douteux, objet écarté et signalé
+  materiaux:
+    - nom: "Béton armé"
+      facteur_kgco2e_m3: 350
+      motifs: ['b[ée]ton', 'concrete', '\bc\d\d/\d\d\b', '\bba\b', 'radier', 'voile']
+    - nom: "Acier"
+      facteur_kgco2e_m3: 14000
+      motifs: ['acier', 'steel', '\bs(235|275|355|460)\b', 'galva', 'm[ée]tal']
+    - nom: "Aluminium"
+      facteur_kgco2e_m3: 22000
+      motifs: ['alu']
+    - nom: "Verre"
+      facteur_kgco2e_m3: 3300
+      motifs: ['verre', 'glass', 'vitr']
+    - nom: "Bois"
+      facteur_kgco2e_m3: 120
+      motifs: ['bois', 'wood', 'timber', 'lamell']
+    - nom: "Maçonnerie"
+      facteur_kgco2e_m3: 300
+      motifs: ['brique', 'parpaing', 'ma[çc]onn', '\bbloc']
+  # matériau supposé quand rien ne l'indique (type IFC → nom de matériau ci-dessus)
+  par_type_ifc:
+    IfcWall: "Béton armé"
+    IfcWallStandardCase: "Béton armé"
+    IfcSlab: "Béton armé"
+    IfcColumn: "Béton armé"
+    IfcBeam: "Béton armé"
+    IfcFooting: "Béton armé"
+    IfcPile: "Béton armé"
+    IfcRamp: "Béton armé"
+    IfcStair: "Béton armé"
+    IfcMember: "Acier"
+    IfcPlate: "Acier"
+    IfcRailing: "Acier"
+    IfcWindow: "Verre"
+    IfcCurtainWall: "Verre"

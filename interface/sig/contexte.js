@@ -102,3 +102,45 @@ export function sectionContexte(m, { carte, police }) {
   }
   return [el('section', { className: 'sig-croisement' }, el('h4', { textContent: 'Contexte de l’ouvrage' }), b, zone)];
 }
+
+/** Section « Carbone » de la fiche d'une maquette : ordre de grandeur par matériau, fiabilité, export CSV. */
+export function sectionCarbone(m) {
+  if (m.etat?.phase !== 'pret') return [];
+  const zone = el('div', { className: 'sig-croisement__resultats' });
+  const b = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Ordre de grandeur des émissions' });
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      const r = await lire(`maquettes/${m.id}/carbone`);
+      const table = el('table', { className: 'sig-attributs' });
+      const tete = table.insertRow();
+      for (const t of ['Matériau', 'Volume', 'Émissions', 'Matériau déclaré']) tete.insertCell().textContent = t;
+      for (const x of r.materiaux) {
+        const tr = table.insertRow();
+        tr.insertCell().textContent = `${x.materiau} (${nf(x.facteur_kgco2e_m3, 0)} kg/m³)`;
+        tr.insertCell().textContent = `${nf(x.volume_m3, 1)} m³`;
+        tr.insertCell().textContent = `${nf(x.tco2e, 1)} t CO2e`;
+        tr.insertCell().textContent = `${Math.round(x.part_declaree * 100)} %`;
+      }
+      const nonClasses = Object.entries(r.non_classes);
+      zone.replaceChildren(...[
+        el('div', { className: 'sig-croisement__tete' },
+          el('strong', { textContent: `≈ ${nf(r.total_tco2e, 0)} t CO2e pour ${nf(r.volume_compte_m3, 0)} m³` }),
+          el('a', { className: 'sig-bouton', href: `api/sig/maquettes/${m.id}/carbone?format=csv`, download: '', textContent: 'CSV' })),
+        r.materiaux.length ? table : el('p', { className: 'sig-info', textContent: 'Aucun objet avec un volume et un matériau identifiable.' }),
+        el('p', { className: 'sig-info', textContent: `${r.nb_comptes} objet(s) comptés sur ${r.nb_objets} ; ${r.nb_sans_volume} sans volume`
+          + `${r.nb_volume_douteux ? ` ; ${r.nb_volume_douteux} au volume douteux écarté(s)` : ''}. Matériau déclaré pour `
+          + `${Math.round(r.part_volume_materiau_declare * 100)} % du volume, sinon déduit du nom de l'objet ou supposé d'après son type IFC.` }),
+        nonClasses.length ? el('p', { className: 'sig-alerte', textContent: `Non comptés faute de matériau identifiable : `
+          + nonClasses.slice(0, 6).map(([t, n]) => `${t} (${n})`).join(', ') }) : null,
+        el('p', { className: 'sig-info', textContent: 'Ordre de grandeur (production des matériaux) avec des facteurs génériques indicatifs '
+          + '(config/georef_maquettes.yaml) : ce n’est pas un bilan carbone réglementaire. À remplacer par les données '
+          + 'environnementales du projet (FDES / INIES).' }),
+      ].filter(Boolean));
+    } catch (e) {
+      zone.replaceChildren(el('p', { className: 'sig-erreur', textContent: e.message }));
+    }
+    b.disabled = false;
+  });
+  return [el('section', { className: 'sig-croisement' }, el('h4', { textContent: 'Carbone des matériaux' }), b, zone)];
+}

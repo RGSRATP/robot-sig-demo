@@ -5,6 +5,7 @@ Le routeur est autonome : le demonstrateur-patrimoine l'inclura tel quel (app.in
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import platform
 from importlib.metadata import PackageNotFoundError, version
 
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
 from . import config as cfg_sig
+from . import carbone as carb_sig
 from . import contexte as ctx_sig
 from . import croisement as crois_sig
 from . import esri as esri_sig
@@ -417,3 +419,19 @@ def maquette_contexte(id_maquette: str, actualiser: bool = False, format: str = 
     if format == "csv":
         return _csv(cfg, ctx_sig.COLONNES_BATI, ctx_sig.lignes_bati(d), f"bati_{m['nom']}")
     return {k: v for k, v in d.items() if not k.startswith("_")}
+
+
+@routeur.get("/maquettes/{id_maquette}/carbone")
+def maquette_carbone(id_maquette: str, format: str = Query("json", pattern="^(json|csv)$"),
+                     cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    """Ordre de grandeur des émissions de production des matériaux de la maquette (index des propriétés)."""
+    if not cfgm.get("carbone"):
+        raise HTTPException(status_code=404, detail="section « carbone » absente de config/georef_maquettes.yaml")
+    rel, _ = _maquette_traitee(id_maquette, cfgm)
+    index = maq_sig.dossier_cache(cfgm, id_maquette) / "proprietes.sqlite"
+    if not index.is_file():
+        raise HTTPException(status_code=409, detail=f"{rel} : index des propriétés absent (maquette à retraiter)")
+    b = carb_sig.bilan(index, cfgm["carbone"])
+    if format == "csv":
+        return _csv(cfg, carb_sig.COLONNES, b["materiaux"], f"carbone_{Path(rel).stem}")
+    return {**b, "maquette": {"id": id_maquette, "fichier": rel}}

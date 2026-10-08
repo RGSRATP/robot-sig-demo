@@ -92,6 +92,9 @@ def charger_config(chemin: Path = CHEMIN_GEOREF) -> dict:
             or not isinstance(rendu.setdefault("couleur_aretes", "#1f2328"), str)):
         raise erreur("« affichage_3d.rendu » : aretes (true/false), angle_aretes_deg, aretes_max_triangles_millions, "
                      "couleur_aretes, opacite_aretes, exposition, contraste_lumiere, zoom_aretes attendus")
+    carbone = cfg.get("carbone")
+    if carbone is not None:
+        _controler_carbone(carbone, erreur)
     if not _nombre((cfg.get("inventaire") or {}).get("balayage_secondes")):
         raise erreur("« inventaire.balayage_secondes » : nombre positif attendu")
     for i, f in enumerate(cfg.get("familles_objets") or [], 1):
@@ -123,6 +126,26 @@ def charger_config(chemin: Path = CHEMIN_GEOREF) -> dict:
         if ("x" in m) != ("y" in m):
             raise erreur(f"« maquettes » n° {i} ({m['fichier']}) : « x » et « y » vont ensemble")
     return cfg
+
+
+def _controler_carbone(c, erreur) -> None:
+    """Section « carbone » : champs de volume et de matériau, matériaux (facteur, motifs), types IFC par défaut."""
+    import re
+    if not isinstance(c, dict) or not all(isinstance(c.get(k), list) and c[k] for k in ("champs_volume", "champs_materiau", "materiaux"))             or not _nombre(c.get("volume_max_objet_m3"), True):
+        raise erreur("« carbone » : champs_volume, champs_materiau, materiaux (listes) et volume_max_objet_m3 attendus")
+    noms = set()
+    for i, m in enumerate(c["materiaux"], 1):
+        if not isinstance(m, dict) or not isinstance(m.get("nom"), str) or not _nombre(m.get("facteur_kgco2e_m3"))                 or not isinstance(m.get("motifs"), list) or not m["motifs"]:
+            raise erreur(f"« carbone.materiaux » n° {i} : nom, facteur_kgco2e_m3 et motifs attendus")
+        for motif in m["motifs"]:
+            try:
+                re.compile(motif)
+            except (re.error, TypeError) as e:
+                raise erreur(f"« carbone.materiaux » {m['nom']} : motif invalide {motif!r} ({e})") from None
+        noms.add(m["nom"])
+    inconnus = sorted({v for v in (c.get("par_type_ifc") or {}).values() if v not in noms})
+    if inconnus:
+        raise erreur(f"« carbone.par_type_ifc » : matériau(x) inconnu(s) {', '.join(inconnus)} (absents de « materiaux »)")
 
 
 @lru_cache(maxsize=4)
