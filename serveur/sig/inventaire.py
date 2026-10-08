@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -24,6 +25,11 @@ FORMATS = {".gpkg": "GeoPackage", ".shp": "Shapefile", ".geojson": "GeoJSON", ".
 # Fichiers compagnons d'un Shapefile ou d'un GeoPackage : ni couche, ni fichier ignoré à signaler.
 COMPAGNONS = {".shx", ".dbf", ".prj", ".cpg", ".qix", ".sbn", ".sbx", ".qmd", ".gpkg-wal", ".gpkg-shm"}
 PROJETS_QGIS = {".qgz", ".qgs"}
+# Pilotes GDAL dont le nom affiché diffère de celui déduit de l'extension (un .json peut être un export ArcGIS).
+NOMS_PILOTES = {"ESRIJSON": "Esri JSON"}
+# Export ArcGIS (requête « query ») arrêté à la limite du service : drapeau placé en tête ou en fin de fichier.
+LIMITE_TRANSFERT = re.compile(rb'"exceededTransferLimit"\s*:\s*true')
+OCTETS_LUS_LIMITE = 65536
 
 
 @dataclass
@@ -160,6 +166,31 @@ def _message(e: Exception, chemin: Path) -> str:
     return texte.split("; It might help")[0].strip(" ;.")
 
 
+def _export_tronque(chemin: Path) -> bool:
+    """Vrai si un export Esri JSON déclare avoir atteint la limite de transfert du service."""
+    with chemin.open("rb") as f:
+        tete = f.read(OCTETS_LUS_LIMITE)
+        taille = chemin.stat().st_size
+        f.seek(max(0, taille - OCTETS_LUS_LIMITE))
+        queue = f.read()
+    return bool(LIMITE_TRANSFERT.search(tete.split(b'"features"')[0]) or LIMITE_TRANSFERT.search(queue))
+
+
+def _message_lecture(e: Exception, chemin: Path) -> str:
+    """Message d'un fichier illisible ; un JSON interrompu à la dernière position est un fichier tronqué."""
+    m = re.search(r"parsing error.*\(at offset (\d+)\)", str(e))
+    if m and int(m.group(1)) >= chemin.stat().st_size - 1:
+        return ("fichier JSON tronqué : il s'arrête avant la fin (export ou copie incomplet). "
+                "Refaites l'export ; le fichier n'est pas modifié")
+    return f"fichier illisible ({_message(e, chemin)})"
+
+
+def _types_reels(chemin: Path, nom_couche: str | None) -> list[str]:
+    """Types des géométries présentes, lus objet par objet (fichier qui déclare un type « Unknown »)."""
+    geoms = pyogrio.read_dataframe(chemin, layer=nom_couche, columns=[]).geometry
+    return sorted(set(geoms[geoms.notna()].geom_type))
+
+
 def _famille(type_geom: str | None) -> str:
     t = (type_geom or "").lower()
     if "point" in t:
@@ -242,10 +273,22 @@ def _couche(cfg, dossier, chemin, nom_couche, d, rang) -> Couche:
         try:
             info = pyogrio.read_info(chemin, layer=nom_couche, force_feature_count=True, force_total_bounds=True)
         except Exception as e:
-            raise AnomalieCouche(f"fichier illisible ({_message(e, chemin)})") from e
+            raise AnomalieCouche(_message_lecture(e, chemin)) from e
         type_geom, nb, champs = info.get("geometry_type"), int(info.get("features") or 0), list(info["fields"])
         if not type_geom:
             raise AnomalieCouche("table sans géométrie")
+        fmt = NOMS_PILOTES.get(info.get("driver"), fmt)
+        if fmt == "Esri JSON" and _export_tronque(chemin):
+            avert.append(f"export ArcGIS tronqué : le service a atteint sa limite de transfert, seuls {nb} objets "
+                         "ont été exportés (« exceededTransferLimit »). Refaites l'export par pages ou déclarez le service")
+        if _famille(type_geom) == "inconnue" and nb:
+            # Ex. Polygon et MultiPolygon mêlés : GDAL déclare « Unknown », la famille se lit sur les objets.
+            reels = _types_reels(chemin, nom_couche)
+            familles = {_famille(t) for t in reels}
+            if len(familles) == 1:
+                type_geom = " / ".join(reels)
+            elif reels:
+                avert.append(f"géométries de natures différentes ({', '.join(reels)}) : style par défaut des points")
         emprise = [float(v) for v in info["total_bounds"]] if info.get("total_bounds") is not None else None
         crs_fichier = info.get("crs")
 
@@ -299,6 +342,53 @@ def _couche(cfg, dossier, chemin, nom_couche, d, rang) -> Couche:
     )
 
 
+def _empreinte(chemin: Path) -> str:
+    h = hashlib.sha1()
+    with chemin.open("rb") as f:
+        for bloc in iter(lambda: f.read(1 << 20), b""):
+            h.update(bloc)
+    return h.hexdigest()
+
+
+def _signaler_doublons(couches: list[Couche]) -> None:
+    """Fichiers au contenu identique (copie sous un autre nom) : chaque couche signale les autres.
+
+    Seuls les fichiers de même taille sont comparés ; les couches d'un même GeoPackage ne sont pas concernées."""
+    par_fichier = {c._chemin: c for c in couches if c._chemin is not None and c.couche is None}
+    par_taille: dict[int, list[Path]] = {}
+    for chemin in par_fichier:
+        par_taille.setdefault(chemin.stat().st_size, []).append(chemin)
+    for chemins in par_taille.values():
+        if len(chemins) < 2:
+            continue
+        par_contenu: dict[str, list[Path]] = {}
+        for chemin in chemins:
+            par_contenu.setdefault(_empreinte(chemin), []).append(chemin)
+        for groupe in par_contenu.values():
+            for chemin in groupe:
+                autres = ", ".join(par_fichier[a].fichier for a in groupe if a != chemin)
+                if autres:
+                    par_fichier[chemin].avertissements.append(
+                        f"contenu identique à {autres} : mêmes objets affichés deux fois (copie sous un autre nom ?)")
+
+
+def _distinguer_libelles(couches: list[Couche], decl: dict) -> None:
+    """Libellés déduits du nom de fichier en double (même nom, autre format ou autre dossier) : extension ajoutée,
+    puis chemin relatif s'il le faut. Un libellé déclaré dans config/sig.yaml n'est jamais modifié."""
+    def declare(c: Couche) -> bool:
+        return bool(_declaration(decl, c.fichier, c.couche).get("libelle"))
+
+    for suffixe in (lambda c: f"{c.libelle} ({Path(c.fichier).suffix.lower()})", lambda c: f"{c.libelle} ({c.fichier})"):
+        groupes: dict[str, list[Couche]] = {}
+        for c in couches:
+            groupes.setdefault(c.libelle.lower(), []).append(c)
+        for groupe in groupes.values():
+            if len(groupe) > 1:
+                for c in groupe:
+                    if not declare(c):
+                        c.libelle = suffixe(c)
+
+
 def inventorier(cfg: dict) -> Inventaire:
     dossier = dossier_sig(cfg)
     couches, anomalies, ignores = [], [], []
@@ -346,6 +436,9 @@ def inventorier(cfg: dict) -> Inventaire:
                 anomalies.append({"fichier": rel, "couche": nom, "message": str(e)})
             except Exception as e:  # garde-fou : un fichier ne doit jamais interrompre l'inventaire
                 anomalies.append({"fichier": rel, "couche": nom, "message": f"erreur inattendue ({type(e).__name__} : {e})"})
+
+    _signaler_doublons(couches)
+    _distinguer_libelles(couches, decl)
 
     for (fichier, nom) in decl:
         if (fichier, nom) not in declares_vus:

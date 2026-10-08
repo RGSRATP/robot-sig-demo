@@ -38,6 +38,19 @@ def test_cc49_et_l93_au_meme_endroit(couche):
     assert a.distance(b) < 1e-7
 
 
+def test_esri_json_cc49_au_meme_endroit_que_geojson(couche):
+    """Export ArcGIS (Esri JSON, CC49) et GeoJSON (WGS84) des mêmes objets : superposés à moins de 1e-6° (~10 cm)."""
+    esri = obj.charger(couche("infrageo_esri (.json)")).wgs84.geometry
+    geojson = obj.charger(couche("infrageo_esri (.geojson)")).wgs84.geometry
+    assert len(esri) == len(geojson) == 12
+    assert max(a.hausdorff_distance(b) for a, b in zip(esri, geojson)) < 1e-6
+
+
+def test_polygones_mixtes_servis(couche):
+    fc = obj.objets(couche("infrageo_polygones_mixtes"), None, 100_000)
+    assert {f["geometry"]["type"] for f in fc["features"]} == {"Polygon", "MultiPolygon"}
+
+
 def test_grosse_couche_exige_emprise(couche):
     with pytest.raises(ValueError, match="bbox"):
         obj.objets(couche("Gares SNCF (France)"), None, 1000)

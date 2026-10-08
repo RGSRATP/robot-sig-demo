@@ -1,4 +1,4 @@
-"""Génère le jeu de test des couches SIG (tests/donnees/jeu/) à partir de données ouvertes IDFM et SNCF.
+r"""Génère le jeu de test des couches SIG (tests/donnees/jeu/) à partir de données ouvertes IDFM et SNCF.
 
 Usage : .venv\Scripts\python tests\donnees\generer.py
 Les téléchargements bruts sont gardés dans tests/donnees/sources/ (hors Git) ; le jeu produit est versionné,
@@ -7,6 +7,7 @@ pour que les tests tournent sans réseau. Sources et licences : tests/donnees/LI
 from __future__ import annotations
 
 import gzip
+import json
 import shutil
 import sys
 import urllib.request
@@ -14,6 +15,8 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+from shapely import MultiPolygon
+from shapely.affinity import translate
 
 ICI = Path(__file__).resolve().parent
 SOURCES = ICI / "sources"
@@ -44,6 +47,42 @@ def telecharger() -> None:
         if contenu[:2] == bytes([0x1F, 0x8B]):  # le portail IDFM répond en gzip même sans le demander
             contenu = gzip.decompress(contenu)
         cible.write_bytes(contenu)
+
+
+def _esri_json(gdf: gpd.GeoDataFrame, epsg: int, tronque: bool) -> str:
+    """Export ArcGIS « query » (f=json) de polylignes, mis en page comme les exports InfraGéo."""
+    objets = [{"attributes": {"objectid": i + 1, "nom": nom},
+               "geometry": {"paths": [[list(xy) for xy in g.coords]]}}
+              for i, (nom, g) in enumerate(zip(gdf["nom"], gdf.geometry))]
+    export = {"displayFieldName": "nom", "geometryType": "esriGeometryPolyline",
+              "spatialReference": {"wkid": epsg, "latestWkid": epsg},
+              "fields": [{"name": "objectid", "type": "esriFieldTypeOID", "alias": "objectid"},
+                         {"name": "nom", "type": "esriFieldTypeString", "alias": "nom", "length": 40}],
+              "features": objets}
+    if tronque:
+        export["exceededTransferLimit"] = True
+    return json.dumps(export, indent=1)
+
+
+def exports_infrageo(gares_l93: gpd.GeoDataFrame) -> None:
+    """Cas rencontrés sur les exports InfraGéo (donnees/sig/Infragéo/CANA, 2026-10-08)."""
+    # Polygon et MultiPolygon mêlés : GDAL déclare un type « Unknown ».
+    zones = gares_l93.head(20)[["nom_gares", "geometry"]].copy()
+    zones["geometry"] = [g.buffer(80) if i % 3 else MultiPolygon([g.buffer(60), translate(g.buffer(60), 400, 0)])
+                         for i, g in enumerate(zones.geometry)]
+    zones.to_crs(4326).to_file(JEU / "infrageo_polygones_mixtes.geojson", driver="GeoJSON")
+    # Copie identique sous un autre nom.
+    shutil.copyfile(JEU / "infrageo_polygones_mixtes.geojson", JEU / "infrageo_copie.json")
+    # Exports ArcGIS (Esri JSON) en CC49 : complet, arrêté à la limite de transfert, coupé en cours d'écriture.
+    lignes = gares_l93.head(12).to_crs(3949)
+    lignes = gpd.GeoDataFrame({"nom": lignes["nom_gares"].tolist()},
+                              geometry=[g.buffer(50).exterior for g in lignes.geometry], crs=3949)
+    (JEU / "infrageo_esri.json").write_text(_esri_json(lignes, 3949, False), encoding="utf-8")
+    # Même couche exportée aussi en GeoJSON (WGS84) : même nom de fichier, autre extension.
+    lignes.to_crs(4326).to_file(JEU / "infrageo_esri.geojson", driver="GeoJSON")
+    (JEU / "infrageo_esri_tronque.json").write_text(_esri_json(lignes, 3949, True), encoding="utf-8")
+    complet = _esri_json(lignes, 3949, False)
+    (JEU / "piege_json_coupe.json").write_text(complet[: len(complet) // 2], encoding="utf-8")
 
 
 def generer() -> None:
@@ -95,6 +134,8 @@ def generer() -> None:
     faux.to_file(JEU / "systeme_declare_config.gpkg", layer="gares", driver="GPKG")
     # Fichiers non géographiques : ignorés et listés.
     (JEU / "notes.txt").write_text("fichier non géographique", encoding="utf-8")
+
+    exports_infrageo(gares_l93)
 
     taille = sum(p.stat().st_size for p in JEU.iterdir()) / 1e6
     print(f"Jeu généré dans {JEU} ({len(list(JEU.iterdir()))} fichiers, {taille:.1f} Mo)")

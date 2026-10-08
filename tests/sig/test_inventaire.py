@@ -115,3 +115,48 @@ def test_fichiers_non_geographiques_ignores(inv):
     assert {"fichier": "notes.txt", "message": "format non géré"} in inv.ignores
     fichiers = {i["fichier"] for i in inv.ignores}
     assert not any(f.endswith((".dbf", ".prj", ".shx", ".cpg")) for f in fichiers)
+
+
+# ---------------------------------------------------------------- exports InfraGéo (cas réels du 2026-10-08)
+
+def test_polygones_mixtes_famille_polygone(couche):
+    """Polygon et MultiPolygon mêlés : GDAL déclare « Unknown », la couche doit garder le style des polygones."""
+    c = couche("infrageo_polygones_mixtes")
+    assert c.geometrie == "polygone"
+    assert c.type_geometrie == "MultiPolygon / Polygon"
+    assert c.style["opacite"] == 0.35 and "rayon" not in c.style
+
+
+def test_esri_json_lu_en_cc49(couche):
+    c = couche("infrageo_esri (.json)")
+    assert c.format == "Esri JSON" and c.geometrie == "ligne"
+    assert c.systeme == "EPSG:3949" and c.nb_objets == 12
+    minx, miny, maxx, maxy = c.emprise_wgs84   # CC49 converti : on retombe en Île-de-France
+    assert 0.8 < minx < maxx < 4.0 and 47.5 < miny < maxy < 49.8
+    assert not any("tronqué" in a for a in c.avertissements)
+
+
+def test_esri_json_tronque_signale(couche):
+    c = couche("infrageo_esri_tronque")
+    assert c.nb_objets == 12   # la couche s'affiche quand même
+    assert any("export ArcGIS tronqué" in a and "12 objets" in a for a in c.avertissements)
+
+
+def test_json_coupe_en_anomalie(anomalie):
+    messages = [a["message"] for a in anomalie("piege_json_coupe.json")]
+    assert messages and "tronqué" in messages[0]
+
+
+def test_copie_identique_signalee(couche):
+    original, copie = couche("infrageo_polygones_mixtes"), couche("infrageo_copie")
+    assert any("contenu identique à infrageo_copie.json" in a for a in original.avertissements)
+    assert any("contenu identique à infrageo_polygones_mixtes.geojson" in a for a in copie.avertissements)
+    assert not any("contenu identique" in a for a in couche("infrageo_esri (.json)").avertissements)
+
+
+def test_libelles_en_double_distingues(couche):
+    """CANA_interstations.geojson et CANA_interstations.json : deux couches, deux libellés distincts."""
+    esri, geojson = couche("infrageo_esri (.json)"), couche("infrageo_esri (.geojson)")
+    assert esri.format == "Esri JSON" and geojson.format == "GeoJSON"
+    # Rectangle CC49 converti en degrés : légèrement plus large que celui des mêmes objets en WGS84 (~100 m).
+    assert esri.emprise_wgs84 == pytest.approx(geojson.emprise_wgs84, abs=2e-3)
