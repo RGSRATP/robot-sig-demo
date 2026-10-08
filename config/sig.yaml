@@ -101,6 +101,46 @@ lidar:
     67: { libelle: "Divers - bâtis", couleur: "#c98a7a" }
   couleur_autres_classes: "#999999"
 
+# Données en temps réel (lot 5) : interrogées par le serveur à travers le proxy (section « reseau »), gardées en
+# mémoire pendant « periode_s », puis relues à la demande de l'interface. Une source injoignable garde sa dernière
+# réponse, datée, avec un message. Types : gbfs (vélos en libre-service), hubeau_hydrometrie (hauteurs d'eau),
+# open_meteo (météo actuelle sur une grille), idfm_prochains_passages (PRIM, clé dans .env via « jeton_env »).
+temps_reel:
+  - id: velib
+    type: gbfs
+    libelle: "Vélib' Métropole : vélos disponibles"
+    url_stations: "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_information.json"
+    url_etat: "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_status.json"
+    periode_s: 60
+    attribution: "Vélib' Métropole (ODbL)"
+  - id: hubeau
+    type: hubeau_hydrometrie
+    libelle: "Hauteur des cours d'eau (Hub'Eau)"
+    url: "https://hubeau.eaufrance.fr/api/v2/hydrometrie"
+    emprise_wgs84: [1.4, 48.1, 3.6, 49.3]   # ouest, sud, est, nord
+    heures: 3                               # observations des dernières heures (la plus récente par station)
+    periode_s: 600
+    attribution: "Hub'Eau, Vigicrues / SCHAPI (Licence Ouverte)"
+  - id: meteo
+    type: open_meteo
+    libelle: "Météo actuelle (Open-Meteo)"
+    url: "https://api.open-meteo.com/v1/forecast"
+    emprise_wgs84: [1.6, 48.2, 3.4, 49.2]
+    pas_deg: 0.2                            # grille de points (environ 15 km)
+    periode_s: 900
+    attribution: "Open-Meteo (CC BY 4.0, usage non commercial gratuit)"
+  - id: idfm
+    type: idfm_prochains_passages
+    libelle: "Prochains passages en gare (IDFM)"
+    url: "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring"
+    url_zones: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/zones-d-arrets/records"
+    url_lignes: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/records"
+    jeton_env: "IDFM_PRIM_CLE"              # NOM de la variable du fichier .env (jamais la clé elle-même)
+    zones_arret: ["58774", "45102", "470549", "58270"]   # Massy-Palaiseau, Châtelet-Les Halles, La Défense, Champigny (RER A)
+    horizon_min: 60                         # passages affichés dans l'heure
+    periode_s: 60
+    attribution: "Île-de-France Mobilités (PRIM)"
+
 donnees:
   dossier_sig: "donnees/sig"   # relatif à la racine du projet ; parcouru avec ses sous-dossiers
 

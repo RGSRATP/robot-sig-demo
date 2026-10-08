@@ -62,6 +62,8 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         _controler_batiments(cfg["batiments"], erreur)
     if cfg.get("lidar") is not None:
         _controler_lidar(cfg["lidar"], erreur)
+    if cfg.get("temps_reel") is not None:
+        _controler_temps_reel(cfg["temps_reel"], erreur)
 
     if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
         raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")
@@ -221,6 +223,42 @@ def _controler_lidar(li, erreur) -> None:
             raise erreur(f"« lidar.classes.{code} » : code entier, libelle et couleur #rrvvbb attendus")
     if not isinstance(li.get("couleur_autres_classes"), str) or not COULEUR.match(li["couleur_autres_classes"]):
         raise erreur("« lidar.couleur_autres_classes » doit être une couleur #rrvvbb")
+
+
+# Clés obligatoires de chaque type de source temps réel (en plus de id, type, libelle, periode_s).
+CLES_TEMPS_REEL = {
+    "gbfs": ("url_stations", "url_etat"),
+    "hubeau_hydrometrie": ("url", "emprise_wgs84", "heures"),
+    "open_meteo": ("url", "emprise_wgs84", "pas_deg"),
+    "idfm_prochains_passages": ("url", "url_zones", "jeton_env", "zones_arret", "horizon_min"),
+}
+
+
+def _controler_temps_reel(sources, erreur) -> None:
+    """Section « temps_reel » (facultative) : sources interrogées par le serveur."""
+    if not isinstance(sources, list):
+        raise erreur("« temps_reel » doit être une liste de sources")
+    vus = set()
+    for i, s in enumerate(sources, 1):
+        if not isinstance(s, dict) or not isinstance(s.get("id"), str) or not re.fullmatch(r"[a-z0-9_-]+", s["id"]):
+            raise erreur(f"« temps_reel » n° {i} : « id » attendu (minuscules, chiffres, - ou _)")
+        nom = f"« temps_reel » {s['id']}"
+        if s["id"] in vus:
+            raise erreur(f"{nom} : identifiant en double")
+        vus.add(s["id"])
+        if s.get("type") not in CLES_TEMPS_REEL:
+            raise erreur(f"{nom} : « type » doit être l'un de : {', '.join(CLES_TEMPS_REEL)}")
+        if not isinstance(s.get("libelle"), str) or not _nombre(s.get("periode_s"), True):
+            raise erreur(f"{nom} : « libelle » et « periode_s » (secondes, > 0) attendus")
+        if any(k in s for k in ("cle", "apikey", "token", "jeton", "mot_de_passe")):
+            raise erreur(f"{nom} : aucune clé ici ; indiquez le NOM de la variable du fichier .env dans « jeton_env »")
+        manquantes = [k for k in CLES_TEMPS_REEL[s["type"]] if s.get(k) in (None, "", [])]
+        if manquantes:
+            raise erreur(f"{nom} : clé(s) {', '.join(manquantes)} absente(s)")
+        e = s.get("emprise_wgs84")
+        if e is not None and not (isinstance(e, list) and len(e) == 4 and all(isinstance(v, (int, float)) for v in e)
+                                  and e[0] < e[2] and e[1] < e[3]):
+            raise erreur(f"{nom} : « emprise_wgs84 » doit valoir [ouest, sud, est, nord] en degrés")
 
 
 def config_lidar(cfg: dict) -> dict | None:

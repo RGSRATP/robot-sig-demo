@@ -7,7 +7,7 @@ import './carte.css';
 import { lire } from './api.js';
 import { GestionnaireCouches } from './couches.js';
 import { sectionMaquette, sectionObjet } from './croisement.js';
-import { afficherBatiment, fermerFiche, monterFiche } from './fiche.js';
+import { afficherBatiment, afficherTempsReel, fermerFiche, monterFiche } from './fiche.js';
 import { versLambert93 } from './lambert93.js';
 import { GestionnaireLocaux } from './locaux.js';
 import { GestionnaireMaquettes } from './maquettes.js';
@@ -15,6 +15,7 @@ import { auSol } from './camera.js';
 import { GestionnaireRelief, idsRelief, styleRelief } from './relief.js';
 import { GestionnaireBatiments, SOURCE_BATIMENTS, styleBatiments } from './batiments.js';
 import { GestionnaireLidar } from './lidar.js';
+import { GestionnaireTempsReel } from './tempsreel.js';
 import { sectionFiltres } from './filtres.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
@@ -177,6 +178,7 @@ export async function monterCarte(conteneur) {
   const pMaquettes = g.ajouter('maquettes', 'Maquettes', 'maquettes');
   const pLocaux = g.ajouter('locaux', 'Plan des locaux', 'plan');
   const pFonds = g.ajouter('fonds', 'Fonds de carte', 'fonds');
+  const pTempsReel = g.ajouter('tempsreel', 'Temps réel', 'temps');
   const pRecherche = g.ajouter('recherche', 'Recherche', 'recherche');
   const pAnomalies = g.ajouter('anomalies', 'Anomalies', 'anomalies');
   const anomaliesCouches = el('div');
@@ -318,6 +320,8 @@ export async function monterCarte(conteneur) {
     },
   });
   if (lidar) pFonds.append(lidar.section());
+  // Données en temps réel (Vélib', Hub'Eau, météo, IDFM), interrogées par le serveur
+  const tempsReel = new GestionnaireTempsReel(carte, { panneau: pTempsReel, police: cfg.police });
   function majBadge() {
     const n = (couches.inventaire?.anomalies.length || 0) + (maquettes.nbAnomalies || 0);
     g.badge('anomalies', n, true);
@@ -340,8 +344,15 @@ export async function monterCarte(conteneur) {
       maquettes.ouvrirObjet(cible3d);
       return;
     }
-    const sig = couches.objetSous(e.point);
     batiments?.selectionner(null);
+    const tr = tempsReel.objetSous(e.point);
+    if (tr) {
+      couches.deselectionner(false);
+      maquettes.deselectionner();
+      afficherTempsReel(tr.proprietes, tr.source);
+      return;
+    }
+    const sig = couches.objetSous(e.point);
     if (sig) {
       maquettes.deselectionner();
       couches.ouvrirObjet(sig.id, sig.n);
@@ -376,7 +387,7 @@ export async function monterCarte(conteneur) {
     maquettes.zoomerObjet();
   });
   carte.on('mousemove', (e) => {
-    const touche = couches.objetSous(e.point) || maquettes.empriseSous(e.point) || batiments?.sous(e.point)
+    const touche = tempsReel.objetSous(e.point) || couches.objetSous(e.point) || maquettes.empriseSous(e.point) || batiments?.sous(e.point)
       || carte.queryRenderedFeatures(e.point, { layers: ['sig-maquettes-groupes'].filter((c) => carte.getLayer(c)) }).length;
     carte.getCanvas().style.cursor = touche ? 'pointer' : '';
   });
@@ -386,6 +397,7 @@ export async function monterCarte(conteneur) {
     if (batiments) batiments.appliquer();
     await couches.demarrer();
     await maquettes.demarrer(cfg.police);
+    await tempsReel.demarrer();
   };
   if (carte.loaded()) demarrer();
   else carte.once('load', demarrer);

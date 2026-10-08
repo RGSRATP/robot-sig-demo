@@ -17,6 +17,7 @@ from . import esri as esri_sig
 from . import inventaire as inv_sig
 from . import maquettes as maq_sig
 from . import objets as obj_sig
+from . import temps_reel as tr_sig
 from commun.ifc import proprietes as proprietes_ifc
 
 VERSION = "0.4.0 (lot 3)"
@@ -381,3 +382,20 @@ def objet_maquettes(id_couche: str, n: int, tampon: float | None = Query(None, g
         return _csv(cfg, crois_sig.COLONNES_MAQUETTES, crois_sig.lignes_maquettes(r),
                     f"maquettes_{couche.libelle}_{libelle or n}")
     return r
+
+
+# ---------------------------------------------------------------- temps réel (lot 5)
+
+@routeur.get("/temps-reel")
+def temps_reel_sources(cfg: dict = Depends(_config_valide)):
+    """Sources temps réel déclarées (présence de la clé éventuelle, jamais sa valeur)."""
+    return {"sources": tr_sig.sources_publiques(cfg)}
+
+
+@routeur.get("/temps-reel/{id_source}")
+def temps_reel_donnees(id_source: str, cfg: dict = Depends(_config_valide)):
+    """Dernières données de la source (GeoJSON WGS84), date des données et de la lecture, message d'erreur."""
+    try:
+        return tr_sig.donnees(cfg, id_source)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"source temps réel inconnue : {id_source}")

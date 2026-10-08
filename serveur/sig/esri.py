@@ -56,17 +56,7 @@ def identifiant(service: dict) -> str:
     return inv_sig.identifiant(f"esri:{service['url'].rstrip('/')}", service.get("where") or "1=1")
 
 
-def _lire_env(nom: str) -> str | None:
-    """Variable d'environnement, sinon ligne NOM=valeur du fichier .env à la racine du projet."""
-    if os.environ.get(nom):
-        return os.environ[nom]
-    env = RACINE / ".env"
-    if env.is_file():
-        for ligne in env.read_text(encoding="utf-8").splitlines():
-            cle, sep, valeur = ligne.partition("=")
-            if sep and cle.strip() == nom:
-                return valeur.strip().strip('"').strip("'") or None
-    return None
+_lire_env = reseau.lire_env   # partagé avec le temps réel
 
 
 def fabrique_client(cfg: dict) -> httpx.Client:

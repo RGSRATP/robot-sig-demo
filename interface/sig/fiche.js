@@ -97,6 +97,55 @@ export function afficherFiche(fiche, couche, fermeture, complements = []) {
   ], fermeture);
 }
 
+// ---------------------------------------------------------------- point temps réel
+
+const nf = (v, d = 2) => (typeof v === 'number' ? v.toLocaleString('fr-FR', { maximumFractionDigits: d }) : v);
+
+/** Fiche d'un point temps réel (Vélib', Hub'Eau, météo, gare IDFM), datée. */
+export function afficherTempsReel(p, source, fermeture) {
+  if (!panneau) return;
+  const date = `données du ${dateCourte(source.date_donnees || source.date_maj)}, lues le ${dateCourte(source.date_maj)}`;
+  let titre = '';
+  let paires = [];
+  const extra = [];
+  if (source.type === 'gbfs') {
+    titre = p.nom;
+    paires = [['Vélos disponibles', p.velos], ['dont mécaniques', p.velos_mecaniques], ['dont électriques', p.velos_electriques],
+      ['Places libres', p.places_libres], ['Capacité', p.capacite], ['État', p.en_service ? 'en service' : 'fermée'],
+      ['Dernier relevé', dateCourte(p.releve)]];
+  } else if (source.type === 'hubeau_hydrometrie') {
+    titre = p.station;
+    paires = [["Cours d'eau", p.cours_d_eau], ['Hauteur', p.hauteur_m != null ? `${nf(p.hauteur_m, 3)} m` : null],
+      ['Observation', dateCourte(p.observation)], ['Code station', p.code]];
+    extra.push(el('p', { className: 'sig-info', textContent: "Hauteur à l'échelle de la station (zéro propre à chaque station, pas une altitude NGF)." }));
+  } else if (source.type === 'open_meteo') {
+    titre = `Météo · ${p.temps}`;
+    paires = [['Température', `${nf(p.temperature_c, 1)} °C`], ['Précipitations', `${nf(p.precipitation_mm, 1)} mm`],
+      ['Vent', `${nf(p.vent_kmh, 0)} km/h, de ${nf(p.vent_direction_deg, 0)}°`], ['Heure (locale)', p.heure_locale]];
+  } else {
+    titre = p.gare;
+    paires = [['Commune', p.commune], ['Zone d’arrêt IDFM', p.zone_arret], ['Erreur', p.erreur]];
+    const passages = Array.isArray(p.passages) ? p.passages : [];
+    if (passages.length) {
+      const table = el('table', { className: 'sig-attributs' });
+      const tete = table.insertRow();
+      for (const t of ['Ligne', 'Destination', 'Départ', 'État']) tete.insertCell().textContent = t;
+      for (const x of passages) {
+        const tr = table.insertRow();
+        tr.insertCell().textContent = x.ligne;
+        tr.insertCell().textContent = x.destination || '';
+        tr.insertCell().textContent = `${new Date(x.heure).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} (${x.dans_min} min)`;
+        tr.insertCell().textContent = { onTime: "à l'heure", delayed: 'retardé', cancelled: 'supprimé', early: 'en avance' }[x.statut] || x.statut || '';
+      }
+      extra.push(el('h4', { textContent: `Prochains passages (${passages.length})` }), table);
+    } else if (!p.erreur) {
+      extra.push(el('p', { className: 'sig-info', textContent: 'Aucun passage annoncé dans l’heure.' }));
+    }
+  }
+  montrer([entete(titre || source.libelle, `${source.libelle} — ${date}`, 'Temps réel'),
+    liste(paires.map(([k, v]) => [k, v == null ? null : String(v)])), ...extra], fermeture);
+}
+
 // ---------------------------------------------------------------- bâtiment BD TOPO
 
 /** Fiche d'un bâtiment des tuiles BD TOPO : attributs choisis en tête (config « champs_fiche »), puis tous. */
