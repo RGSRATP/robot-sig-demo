@@ -67,11 +67,11 @@ export function sectionFiltres(c3d) {
       boutons.append(b);
     }
     const masques = f.typesMasques.size + f.famillesMasquees.size + (f.isolee != null ? 1 : 0);
-    zone.replaceChildren(
+    zone.replaceChildren(...[   // replaceChildren écrirait « null » en texte : éléments absents retirés
       el('h4', { textContent: 'Familles' }), familles,
       el('h4', { textContent: `Types IFC (${r.types.length})${masques ? ` · ${masques} filtre(s) actif(s)` : ''}` }), saisie, boutons, types,
       choisis.length > MAX_TYPES ? el('p', { className: 'sig-info', textContent: `${choisis.length - MAX_TYPES} autres types : précisez la recherche.` }) : null,
-    );
+    ].filter(Boolean));
   }
 
   c3d.surTypes = rendre;

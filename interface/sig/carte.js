@@ -17,6 +17,7 @@ import { GestionnaireBatiments, SOURCE_BATIMENTS, styleBatiments } from './batim
 import { GestionnaireLidar } from './lidar.js';
 import { GestionnaireTempsReel } from './tempsreel.js';
 import { OutilMesure } from './mesures.js';
+import { OutilCoupe } from './coupe.js';
 import { sectionFiltres } from './filtres.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
@@ -333,6 +334,9 @@ export async function monterCarte(conteneur) {
   const tempsReel = new GestionnaireTempsReel(carte, { panneau: pTempsReel, police: cfg.police });
   // Mesures 2D et 3D : en mode mesure, les clics posent des points au lieu de sélectionner
   const mesure = new OutilMesure(carte, c3d, { panneau: pMesures, police: cfg.police });
+  // Plan de coupe ajustable (volet Vue 3D) : coupe la 3D, les bâtiments et les points et lignes SIG
+  const coupe = new OutilCoupe(carte, c3d, { couches, batiments });
+  pVue3d.append(coupe.section());
   function majBadge() {
     const n = (couches.inventaire?.anomalies.length || 0) + (maquettes.nbAnomalies || 0);
     g.badge('anomalies', n, true);
@@ -341,7 +345,7 @@ export async function monterCarte(conteneur) {
 
   // Répartition des clics : local du plan affiché, objet de maquette 3D, objet SIG, emprise de maquette.
   carte.on('click', async (e) => {
-    if (mesure.clic(e)) return;
+    if (coupe.clic(e) || mesure.clic(e)) return;
     if (await maquettes.deplierGroupe(e.point)) return;   // groupe de maquettes (vue éloignée) : zoom
     const local = c3d.localSous(e.point);
     if (local) {
@@ -412,6 +416,7 @@ export async function monterCarte(conteneur) {
     await maquettes.demarrer(cfg.police);
     await tempsReel.demarrer();
     mesure.installer();
+    coupe.installer(cfg.police);
   };
   if (carte.loaded()) demarrer();
   else carte.once('load', demarrer);

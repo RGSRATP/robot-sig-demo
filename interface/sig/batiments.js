@@ -67,6 +67,7 @@ export class GestionnaireBatiments {
     this.visible = cfg.visible;
     this.masquer = cfg.masquer_sous_maquettes;
     this.masques = new Set();   // identifiants des bâtiments masqués
+    this.coupe = null;          // plan de coupe (coupe.js) : (lon, lat) → vrai si retiré
     this.choisi = null;
     carte.on('idle', () => this._majMasques());
   }
@@ -79,18 +80,20 @@ export class GestionnaireBatiments {
     this.carte.setFeatureState({ source: SOURCE_BATIMENTS, sourceLayer: this.cfg.couche_source, id }, etat);
   }
 
-  /** Masque les bâtiments sous les maquettes 3D (recalculé quand la carte est au repos : tuiles, maquettes). */
+  /** Masque les bâtiments sous les maquettes 3D et ceux retirés par le plan de coupe (centre du bâtiment),
+   *  recalculé quand la carte est au repos (tuiles chargées, maquettes, coupe). */
   _majMasques() {
     const voulus = new Set();
-    if (this.actifs && this.masquer) {
-      const emprises = this.emprises3d().map((g) => { const p = polygones(g); return { p, b: boite(p) }; });
-      if (emprises.length) {
+    if (this.actifs && (this.masquer || this.coupe)) {
+      const emprises = this.masquer ? this.emprises3d().map((g) => { const p = polygones(g); return { p, b: boite(p) }; }) : [];
+      if (emprises.length || this.coupe) {
         const feats = this.carte.querySourceFeatures(SOURCE_BATIMENTS, { sourceLayer: this.cfg.couche_source });
         for (const f of feats) {
           if (f.id == null || voulus.has(f.id)) continue;
           const pb = polygones(f.geometry);
           const bb = boite(pb);
-          if (emprises.some((e) => !disjointes(e.b, bb) && recoupe(pb, e.p))) voulus.add(f.id);
+          if (this.coupe && this.coupe((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2)) voulus.add(f.id);
+          else if (emprises.some((e) => !disjointes(e.b, bb) && recoupe(pb, e.p))) voulus.add(f.id);
         }
       }
     }
@@ -111,6 +114,11 @@ export class GestionnaireBatiments {
     if (this.choisi != null) this._etat(this.choisi, { choisi: false });
     this.choisi = id;
     if (id != null) this._etat(id, { choisi: true });
+  }
+
+  definirCoupe(fn) {
+    this.coupe = fn;
+    this._majMasques();
   }
 
   appliquer() {

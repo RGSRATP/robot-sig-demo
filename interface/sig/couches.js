@@ -103,6 +103,7 @@ export class GestionnaireCouches {
       this.carte.addSource(`sig-src-${c.id}`, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       for (const calque of calques(c)) this.carte.addLayer(calque, 'sig-sel-fl');
       this._appliquerVisibilite(c.id);
+      this._appliquerCoupe(c.id);
     }
     this._rendre();
     // après l'inventaire : la liste des couches de la recherche doit être remplie
@@ -268,6 +269,19 @@ export class GestionnaireCouches {
   }
 
   // ------------------------------------------------------------ panneau
+
+  /** Plan de coupe (coupe.js) : expression de filtre supplémentaire (objets conservés), ou null. */
+  definirCoupe(expr) {
+    this.filtreCoupe = expr;
+    for (const id of this.etats.keys()) this._appliquerCoupe(id);
+  }
+
+  _appliquerCoupe(id) {
+    for (const [suffixe, f] of [['fl', FILTRES.fl], ['ol', FILTRES.fl], ['ln', FILTRES.ln], ['pt', FILTRES.pt]]) {
+      const calque = `sig-${id}-${suffixe}`;
+      if (this.carte.getLayer(calque)) this.carte.setFilter(calque, this.filtreCoupe ? ['all', f, this.filtreCoupe] : f);
+    }
+  }
 
   _info(id, texte, alerte = false) {
     const etat = this.etats.get(id);

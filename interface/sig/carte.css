@@ -374,3 +374,6 @@ a.sig-bouton { text-decoration: none; display: inline-block; }
 .sig-filtre-saisie { width: 100%; box-sizing: border-box; margin: 4px 0; padding: 5px 8px; border: 1px solid var(--sig-trait); border-radius: 3px; font: inherit; }
 .sig-bouton--petit { padding: 2px 8px; font-size: 12px; }
 .sig-bouton.sig-bouton--actif, .sig-bouton.sig-bouton--actif:hover { background: var(--sig-bleu); border-color: var(--sig-bleu); color: #fff; }
+
+/* Plan de coupe : poignées déplaçables aux extrémités */
+.sig-poignee-coupe { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid #e8590c; cursor: grab; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
