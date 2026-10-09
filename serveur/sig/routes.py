@@ -407,9 +407,11 @@ def temps_reel_donnees(id_source: str, cfg: dict = Depends(_config_valide)):
 # ---------------------------------------------------------------- contexte d'une maquette (lot 5, croisements)
 
 @routeur.get("/maquettes/{id_maquette}/contexte")
-def maquette_contexte(id_maquette: str, actualiser: bool = False, format: str = Query("json", pattern="^(json|csv)$"),
+def maquette_contexte(id_maquette: str, actualiser: bool = False,
+                      format: str = Query("json", pattern="^(json|csv|csv_niveaux)$"),
                       cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
-    """Risques (Géorisques), bâti environnant (BDNB) et niveau du cours d'eau le plus proche (Hub'Eau)."""
+    """Risques (Géorisques), bâti environnant (BDNB), niveau du cours d'eau le plus proche (Hub'Eau) et crues
+    historiques (Vigicrues) comparés aux niveaux de la maquette. CSV : bâti (« csv ») ou niveaux (« csv_niveaux »)."""
     if not cfg.get("contexte"):
         raise HTTPException(status_code=404, detail="section « contexte » absente de config/sig.yaml")
     m = _maquette_decrite(id_maquette, cfg, cfgm)
@@ -418,7 +420,12 @@ def maquette_contexte(id_maquette: str, actualiser: bool = False, format: str = 
     d = ctx_sig.contexte(cfg, m, actualiser=actualiser)
     if format == "csv":
         return _csv(cfg, ctx_sig.COLONNES_BATI, ctx_sig.lignes_bati(d), f"bati_{m['nom']}")
-    return {k: v for k, v in d.items() if not k.startswith("_")}
+    niveaux = maq_sig.niveaux_ngf(cfgm, m, delai_s=float(cfg["contexte"].get("delai_etages_s", 300)))
+    eau = ctx_sig.face_a_l_eau(d["crue"], niveaux)
+    if format == "csv_niveaux":
+        colonnes, lignes = ctx_sig.tableau_niveaux(eau)
+        return _csv(cfg, colonnes, lignes, f"niveaux_eau_{m['nom']}")
+    return {**{k: v for k, v in d.items() if not k.startswith("_")}, "face_a_l_eau": eau}
 
 
 @routeur.get("/maquettes/{id_maquette}/carbone")

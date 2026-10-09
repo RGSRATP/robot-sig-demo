@@ -1,6 +1,6 @@
 """Contexte d'une maquette (lot 5, croisements) : risques autour de l'ouvrage (Géorisques), bâti dans une bande
 autour de son emprise (BDNB : âge, niveaux, matériaux, argiles), niveau actuel du cours d'eau le plus proche
-(Hub'Eau, converti en NGF) comparé au point bas de la maquette.
+(Hub'Eau, converti en NGF) et crues historiques (Vigicrues), comparés au point bas et aux niveaux de la maquette.
 
 Interrogé par le serveur à la demande, à travers le proxy ; résultat gardé en cache (« cache_heures »). Ne jamais
 bloquer : chaque interrogation est indépendante, une source en panne devient un message, les autres s'affichent.
@@ -203,11 +203,39 @@ def batiments(cx: dict, client: httpx.Client, emprise_l93) -> tuple[list, dict, 
     return feats, synthese, erreurs
 
 
-# ---------------------------------------------------------------- crue (Hub'Eau)
+# ---------------------------------------------------------------- crue (Hub'Eau, Vigicrues)
+
+def crues_historiques(cx: dict, client: httpx.Client, stations: list[dict], cours_d_eau: str | None) -> tuple[dict | None, list]:
+    """Crues historiques publiées par Vigicrues (hauteurs à l'échelle) pour la station la plus proche qui en
+    publie, de préférence sur le même cours d'eau ; converties en NGF avec le zéro d'échelle actuel de la station
+    (Hub'Eau). Seules les stations de prévision de Vigicrues en publient."""
+    if not cx.get("vigicrues"):
+        return None, []
+    candidates = [s for s in stations if s.get("altitude_ref_alti_station") is not None]
+    candidates.sort(key=lambda s: (s.get("libelle_cours_eau") != cours_d_eau, s["_d"]))
+    erreurs = []
+    for s in candidates[:cx.get("max_stations_vigicrues", 4)]:
+        try:
+            d = _get(client, cx["vigicrues"], params={"CdStationHydro": s["code_station"]})
+        except ErreurContexte as e:
+            erreurs.append(f"Vigicrues : {e}")
+            break
+        liste = ((d or {}).get("VigilanceCrues") or {}).get("CruesHistoriques") or []
+        zero = s["altitude_ref_alti_station"]
+        crues = [{"libelle": c.get("LbUsuel") or "crue", "hauteur_m": float(c["ValHauteur"]),
+                  "niveau_ngf": round(zero + float(c["ValHauteur"]), 2), "debit_m3s": c.get("ValDebit")}
+                 for c in liste if isinstance(c.get("ValHauteur"), (int, float))]
+        if crues:
+            crues.sort(key=lambda c: -c["niveau_ngf"])
+            return {"station": s["libelle_station"], "cours_d_eau": s.get("libelle_cours_eau"), "code": s["code_station"],
+                    "distance_km": round(s["_d"] / 1000, 2), "zero_echelle_ngf": zero, "crues": crues,
+                    "meme_cours_d_eau": s.get("libelle_cours_eau") == cours_d_eau}, erreurs
+    return None, erreurs
+
 
 def cours_d_eau(cx: dict, client: httpx.Client, lon: float, lat: float, point_bas_ngf: float | None) -> tuple[dict | None, list]:
     """Station hydrométrique la plus proche (hauteur d'eau H), niveau actuel converti en NGF (zéro d'échelle de la
-    station + hauteur) et marge par rapport au point bas de la maquette."""
+    station + hauteur) et marge par rapport au point bas de la maquette ; crues historiques (Vigicrues)."""
     r = cx["rayon_station_km"]
     dlat, dlon = r / 111.0, r / (111.0 * math.cos(math.radians(lat)))
     try:
@@ -225,8 +253,8 @@ def cours_d_eau(cx: dict, client: httpx.Client, lon: float, lat: float, point_ba
         stations.sort(key=lambda s: s["_d"])
         erreurs = []
         # la plus proche qui publie une hauteur récente et l'altitude de son zéro d'échelle (niveau NGF calculable)
-        stations = sorted(stations[:8], key=lambda s: (s.get("altitude_ref_alti_station") is None, s["_d"]))
-        for s in stations:
+        proches = sorted(stations[:8], key=lambda s: (s.get("altitude_ref_alti_station") is None, s["_d"]))
+        for s in proches:
             obs = _get(client, f"{cx['hubeau']}/observations_tr", params={
                 "code_entite": s["code_station"], "grandeur_hydro": "H", "size": 1, "sort": "desc"})
             if not obs.get("data"):
@@ -237,16 +265,34 @@ def cours_d_eau(cx: dict, client: httpx.Client, lon: float, lat: float, point_ba
             niveau = round(zero + h, 2) if zero is not None else None
             if zero is None:
                 erreurs.append(f"Hub'Eau : altitude du zéro d'échelle inconnue pour {s['libelle_station']} : niveau NGF non calculable")
+            historiques, err = crues_historiques(cx, client, stations[:8], s.get("libelle_cours_eau"))
             return {"station": s["libelle_station"], "cours_d_eau": s.get("libelle_cours_eau"), "code": s["code_station"],
                     "distance_km": round(s["_d"] / 1000, 2), "hauteur_m": round(h, 3), "zero_echelle_ngf": zero,
                     "niveau_ngf": niveau, "observation": o.get("date_obs"), "point_bas_maquette_ngf": point_bas_ngf,
                     "marge_m": round(point_bas_ngf - niveau, 2) if niveau is not None and point_bas_ngf is not None else None,
-                    "lon": s["longitude_station"], "lat": s["latitude_station"]}, erreurs
+                    "lon": s["longitude_station"], "lat": s["latitude_station"], "historiques": historiques}, erreurs + err
         return None, ["Hub'Eau : aucune hauteur d'eau récente aux stations voisines"]
     except ErreurContexte as e:
         return None, [f"Hub'Eau : {e}"]
     except (KeyError, TypeError, ValueError) as e:
         return None, [f"Hub'Eau : réponse inattendue ({type(e).__name__})"]
+
+
+def face_a_l_eau(crue: dict | None, niveaux: dict) -> dict:
+    """Croisement « crue × niveaux » : chaque niveau de la maquette (altitude NGF du plancher) comparé au niveau
+    actuel du cours d'eau et aux crues historiques. Marge positive : plancher au-dessus du niveau de l'eau.
+    Comparaison d'altitudes seulement : ni protections, ni cheminement de l'eau, ni distance au cours d'eau."""
+    refs = []
+    if crue and crue.get("niveau_ngf") is not None:
+        refs.append({"libelle": "Niveau actuel", "niveau_ngf": crue["niveau_ngf"], "date": crue.get("observation")})
+    h = (crue or {}).get("historiques")
+    if h:
+        refs += [{"libelle": c["libelle"], "niveau_ngf": c["niveau_ngf"]} for c in h["crues"]]
+    lignes = []
+    for n in niveaux.get("niveaux", []):
+        marges = [round(n["altitude_ngf"] - r["niveau_ngf"], 2) for r in refs]
+        lignes.append({**n, "marges_m": marges, "sous": [r["libelle"] for r, m in zip(refs, marges) if m < 0]})
+    return {"references": refs, "niveaux": lignes, "source": niveaux.get("source"), "message": niveaux.get("message")}
 
 
 # ---------------------------------------------------------------- assemblage et cache
@@ -293,3 +339,12 @@ COLONNES_BATI = [("id", "Identifiant BDNB"), ("annee_construction", "Année de c
 
 def lignes_bati(d: dict) -> list[dict]:
     return [f["properties"] for f in d["batiments"]["features"]]
+
+
+def tableau_niveaux(eau: dict) -> tuple[list, list[dict]]:
+    """Colonnes et lignes de l'export CSV « niveaux face à l'eau » : une colonne de marge par référence."""
+    colonnes = [("nom", "Niveau"), ("source", "Origine de l'altitude"), ("altitude_ngf", "Altitude (m NGF)")]
+    colonnes += [(f"ref{i}", f"Marge / {r['libelle']} ({r['niveau_ngf']} m NGF)") for i, r in enumerate(eau["references"])]
+    lignes = [{"nom": n["nom"], "source": n["source"], "altitude_ngf": n["altitude_ngf"],
+               **{f"ref{i}": m for i, m in enumerate(n["marges_m"])}} for n in eau["niveaux"]]
+    return colonnes, lignes

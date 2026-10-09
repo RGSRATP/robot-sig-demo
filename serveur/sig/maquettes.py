@@ -189,10 +189,18 @@ def cle_locaux(chemin: Path, cfgm: dict) -> str:
     return f"{cle_traitement(chemin, cfgm)}-locaux{VERSION_LOCAUX}"
 
 
+VERSION_ETAGES = "1"   # extraction des étages (IfcBuildingStorey), cache séparé de la 3D et des locaux
+
+
+def cle_etages(chemin: Path, cfgm: dict) -> str:
+    return f"{cle_traitement(chemin, cfgm)}-etages{VERSION_ETAGES}"
+
+
 def parametres_traitement(chemin: Path, cfgm: dict, tache: str = "complet") -> dict:
     """Paramètres transmis au travailleur (serveur/sig/travail_ifc.py)."""
     t = cfgm["traitement"]
-    return {"cle": cle_traitement(chemin, cfgm), "cle_locaux": cle_locaux(chemin, cfgm), "tache": tache,
+    return {"cle": cle_traitement(chemin, cfgm), "cle_locaux": cle_locaux(chemin, cfgm),
+            "cle_etages": cle_etages(chemin, cfgm), "tache": tache,
             "exclure": t["exclure"], "petits_elements_m": t["petits_elements_m"],
             "simplification_3d_m": t["simplification_3d_m"],
             "simplification_emprise_m": t["simplification_emprise_m"],
@@ -789,6 +797,82 @@ def locaux_affichables(cfg: dict, cfgm: dict, m: dict) -> dict | None:
     niveaux = [{**n, "hauteurs": [round(n["z_min"] + dz, 2), round(n["z_max"] + dz, 2)] if n["z_min"] is not None else None}
                for n in d["niveaux"]]
     return {"maquette": m["id"], "positionnee": positionnee, "niveaux": niveaux, "locaux": sortie}
+
+
+_VERROUS_ETAGES: dict[str, threading.Lock] = {}
+
+
+def _extraire_etages(cfgm: dict, id_: str, chemin: Path, delai_s: float) -> str | None:
+    """Lance l'extraction des étages (processus séparé, comme les traitements) et l'attend ; message si échec."""
+    sortie = dossier_cache(cfgm, id_)
+    params = sortie / "parametres_etages.json"
+    params.write_text(json.dumps(parametres_traitement(chemin, cfgm, "etages")), encoding="utf-8")
+    commande = [sys.executable, "-m", "serveur.sig.travail_ifc", str(chemin), str(sortie), str(params)]
+    try:
+        with (sortie / "journal_etages.txt").open("w", encoding="utf-8", errors="replace") as journal:
+            p = subprocess.Popen(commande, cwd=RACINE, stdout=journal, stderr=subprocess.STDOUT,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            try:
+                code = p.wait(timeout=delai_s)
+            except subprocess.TimeoutExpired:
+                arreter_processus(p)
+                return f"lecture des étages interrompue après {delai_s:.0f} s (« contexte.delai_etages_s »)"
+    except OSError as e:
+        return f"lecture des étages impossible ({e})"
+    return None if code == 0 else "lecture des étages en échec (voir journal_etages.txt dans le cache)"
+
+
+def niveaux_ngf(cfgm: dict, m: dict, delai_s: float = 0) -> dict:
+    """Niveaux d'une maquette positionnée en altitude NGF (terrain IGN + hauteur affichée, comme le point bas).
+
+    Source : étages IFC (IfcBuildingStorey, altitude de leur placement), extraits à la demande s'ils ne sont pas
+    en cache (delai_s > 0) ; à défaut, niveaux des locaux (altitude basse des IfcSpace de chaque niveau) ; à défaut,
+    points bas et haut du modèle 3D (tunnels, ouvrages sans étages).
+    """
+    pos = m.get("positionnement") or {}
+    sortie = {"source": None, "niveaux": [], "message": None}
+    trouve = chemin_maquette(cfgm, m["id"])
+    if pos.get("statut") != "positionnee" or trouve is None:
+        sortie["message"] = "maquette non positionnée"
+        return sortie
+    sol, dz = pos.get("altitude_terrain"), pos["affichage"]["decalage_z_m"]
+    if sol is None:
+        sortie["message"] = "altitude du terrain inconnue : niveaux non convertis en NGF"
+        return sortie
+    cle = cle_etages(trouve[1], cfgm)
+    fichier = dossier_cache(cfgm, m["id"]) / "etages.json"
+    d = _lire_json(fichier)
+    if (not d or d.get("cle") != cle) and delai_s > 0:
+        with _VERROUS_ETAGES.setdefault(m["id"], threading.Lock()):
+            d = _lire_json(fichier)
+            if not d or d.get("cle") != cle:
+                sortie["message"] = _extraire_etages(cfgm, m["id"], trouve[1], delai_s)
+                d = _lire_json(fichier)
+
+    def niveau(nom, z, source):
+        h = round(z + dz, 2)
+        return {"nom": nom, "source": source, "hauteur_m": h, "altitude_ngf": round(sol + h, 2)}
+
+    if d and d.get("cle") == cle:
+        etages = [e for e in d["etages"] if e["z"] is not None]
+        if etages:
+            sortie.update(source="étages IFC", niveaux=[niveau(e["nom"] or e["nom_long"] or "étage sans nom", e["z"], e["z_source"])
+                                                        for e in etages])
+            return sortie
+    dl = locaux(cfgm, m["id"], cle_locaux(trouve[1], cfgm))
+    if dl and any(n["z_min"] is not None for n in dl["niveaux"]):
+        sortie.update(source="locaux", niveaux=[niveau(n["niveau"], n["z_min"], "bas des locaux")
+                                                for n in dl["niveaux"] if n["z_min"] is not None])
+        return sortie
+    h = pos.get("hauteurs_affichees")
+    if h:   # ouvrage sans étages (tunnel, ouvrage d'art) : points bas et haut du modèle 3D
+        sortie.update(source="modèle 3D", niveaux=[
+            {"nom": "Point bas de la maquette", "source": "modèle 3D", "hauteur_m": h[0], "altitude_ngf": round(sol + h[0], 2)},
+            {"nom": "Point haut de la maquette", "source": "modèle 3D", "hauteur_m": h[1], "altitude_ngf": round(sol + h[1], 2)}])
+        sortie["message"] = sortie["message"] or "ni étage ni local situé : points bas et haut du modèle 3D"
+        return sortie
+    sortie["message"] = sortie["message"] or "ni étage ni local situé dans la maquette"
+    return sortie
 
 
 def inventaire(cfg: dict, cfgm: dict) -> dict:

@@ -348,3 +348,56 @@ def test_ecriture_etat_refusee_par_windows_n_interrompt_pas(tmp_path, monkeypatc
     assert json.loads((tmp_path / "resultat.json").read_text(encoding="utf-8")) == {"a": 1}
     monkeypatch.setattr(Path, "replace", lambda self, cible: (_ for _ in ()).throw(PermissionError(5, "Accès refusé")))
     travail_ifc._ecrire_etat(tmp_path / "etat.json", {"phase": "x"})   # toujours refusé : ignoré, pas d'exception
+
+
+# ---------------------------------------------------------------- niveaux en NGF (lot 5, crue × niveaux)
+
+def test_niveaux_ngf_depuis_les_etages(inv, cfgm):
+    # étage N00 au pied des murs (z local 0), maquette 20 m au-dessus d'un terrain à 60 m : plancher à 80 m NGF
+    n = maq.niveaux_ngf(cfgm, inv["methode2a_site_cc49_identifie"])
+    assert n["source"] == "étages IFC" and n["message"] is None
+    assert [(x["nom"], x["altitude_ngf"]) for x in n["niveaux"]] == [("N00", pytest.approx(80.0, abs=0.01))]
+
+
+def test_niveaux_ngf_extraits_a_la_demande(inv, cfgm):
+    m = inv["methode2a_site_cc49_identifie"]
+    (maq.dossier_cache(cfgm, m["id"]) / "etages.json").unlink()
+    # sans délai : niveaux des locaux (bas du local B1.01, au niveau du plancher)
+    n = maq.niveaux_ngf(cfgm, m)
+    assert n["source"] == "locaux" and n["niveaux"][0]["altitude_ngf"] == pytest.approx(80.0, abs=0.01)
+    # avec délai : lecture des étages dans un processus séparé, puis cache
+    n = maq.niveaux_ngf(cfgm, m, delai_s=120)
+    assert n["source"] == "étages IFC", n
+    assert (maq.dossier_cache(cfgm, m["id"]) / "etages.json").is_file()
+
+
+def test_niveaux_ngf_maquette_non_positionnee(inv, cfgm):
+    n = maq.niveaux_ngf(cfgm, inv["sans_georeferencement"])
+    assert n["niveaux"] == [] and "non positionnée" in n["message"]
+
+
+def test_api_contexte_niveaux_face_a_l_eau(client, inv, cfg_test, monkeypatch):
+    from serveur.sig import contexte as ctx
+    monkeypatch.setitem(cfg_test, "contexte", {"delai_etages_s": 120})
+    crue = {"niveau_ngf": 79.0, "observation": "2026-10-09T08:00:00Z",
+            "historiques": {"crues": [{"libelle": "Crue de 1910", "niveau_ngf": 81.2}]}}
+    monkeypatch.setattr(ctx, "contexte", lambda cfg, m, actualiser=False: {
+        "risques": [], "crue": crue, "erreurs": [], "_lu_a": 0,
+        "batiments": {"type": "FeatureCollection", "features": []}})
+    id_ = inv["methode2a_site_cc49_identifie"]["id"]
+    eau = client.get(f"/api/sig/maquettes/{id_}/contexte").json()["face_a_l_eau"]
+    assert eau["source"] == "étages IFC" and eau["niveaux"][0]["marges_m"] == pytest.approx([1.0, -1.2], abs=0.01)
+    assert eau["niveaux"][0]["sous"] == ["Crue de 1910"]
+    r = client.get(f"/api/sig/maquettes/{id_}/contexte", params={"format": "csv_niveaux"})
+    texte = r.content.decode("utf-8-sig")
+    assert r.status_code == 200 and "Marge / Crue de 1910 (81.2 m NGF)" in texte and "N00" in texte
+
+
+def test_niveaux_ngf_sans_etage_ni_local_points_bas_et_haut(inv, cfgm):
+    m = inv["methode1_map_conversion_ifc4"]
+    d = maq.dossier_cache(cfgm, m["id"])
+    for n in ("etages.json", "locaux.json"):
+        (d / n).unlink(missing_ok=True)
+    n = maq.niveaux_ngf(cfgm, m)
+    h = m["positionnement"]["hauteurs_affichees"]
+    assert n["source"] == "modèle 3D" and [x["altitude_ngf"] for x in n["niveaux"]] == pytest.approx([60 + h[0], 60 + h[1]], abs=0.01)

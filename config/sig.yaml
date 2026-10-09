@@ -157,6 +157,9 @@ contexte:
   max_batiments: 1500                # bâtiments lus au plus (la BDNB répond par pages de 10, ~4 s par 100) : au-delà, liste tronquée (signalé)
   hubeau: "https://hubeau.eaufrance.fr/api/v2/hydrometrie"
   rayon_station_km: 5                # station hydrométrique la plus proche dans ce rayon
+  vigicrues: "https://www.vigicrues.gouv.fr/services/station.json/index.php"   # crues historiques des stations de prévision
+  max_stations_vigicrues: 4          # stations voisines interrogées au plus pour trouver des crues historiques
+  delai_etages_s: 300                # lecture des étages IFC d'une maquette traitée avant leur extraction (une fois, mise en cache)
 
 donnees:
   dossier_sig: "donnees/sig"   # relatif à la racine du projet ; parcouru avec ses sous-dossiers

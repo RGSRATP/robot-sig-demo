@@ -50,3 +50,20 @@ def test_fiche_d_un_local_donne_son_etage(maquette):
     f, _ = maquette
     fiche = proprietes.fiche(f.by_type("IfcSpace")[0])
     assert fiche["etage"] == "N00" and "Données d'identification" in fiche["psets"]
+
+
+def test_etages_altitude_locale(maquette):
+    f, decalage = maquette
+    e = locaux.etages(f, decalage)
+    assert [(x["nom"], x["z"], x["z_source"]) for x in e] == [("N00", 0.0, "placement")]
+
+
+def test_etages_sans_placement_ni_elevation():
+    import ifcopenshell
+    import ifcopenshell.api as api
+    f = ifcopenshell.file(schema="IFC4")
+    api.run("root.create_entity", f, ifc_class="IfcProject", name="P")
+    api.run("root.create_entity", f, ifc_class="IfcBuildingStorey", name="R+1").Elevation = 4.0
+    api.run("root.create_entity", f, ifc_class="IfcBuildingStorey", name="?")
+    e = locaux.etages(f)
+    assert [(x["nom"], x["z"], x["z_source"]) for x in e] == [("R+1", 4.0, "elevation"), ("?", None, None)]

@@ -118,6 +118,27 @@ def locaux(f: ifcopenshell.file, decalage=(0.0, 0.0, 0.0), processus: int | None
     return resultat
 
 
+def etages(f: ifcopenshell.file, decalage=(0.0, 0.0, 0.0)) -> list[dict]:
+    """Étages (IfcBuildingStorey), du plus bas au plus haut, avec leur altitude « z » en coordonnées locales
+    (monde − décalage, comme le modèle 3D et les locaux), tirée du placement de l'étage ; à défaut de placement,
+    de l'attribut Elevation (z_source le dit). L'attribut Elevation est aussi rendu tel quel : il est relatif au
+    bâtiment ou au projet selon les logiciels, il ne sert donc pas de référence."""
+    import ifcopenshell.util.placement as util_placement
+    echelle = util_unit.calculate_unit_scale(f)
+    resultat = []
+    for e in f.by_type("IfcBuildingStorey"):
+        elevation = float(e.Elevation) * echelle if getattr(e, "Elevation", None) is not None else None
+        if e.ObjectPlacement is not None:
+            z, source = float(util_placement.get_local_placement(e.ObjectPlacement)[2, 3]) * echelle - float(decalage[2]), "placement"
+        elif elevation is not None:
+            z, source = elevation, "elevation"
+        else:
+            z, source = None, None
+        resultat.append({"guid": e.GlobalId, "nom": e.Name, "nom_long": getattr(e, "LongName", None),
+                         "z": round(z, 3) if z is not None else None, "z_source": source, "elevation": elevation})
+    return sorted(resultat, key=lambda d: (d["z"] is None, d["z"] if d["z"] is not None else 0.0, d["nom"] or ""))
+
+
 def niveaux(liste: list[dict]) -> list[dict]:
     """Niveaux présents (du plus bas au plus haut) avec leur nombre de locaux et leurs altitudes."""
     par_niveau: dict[str, dict] = {}

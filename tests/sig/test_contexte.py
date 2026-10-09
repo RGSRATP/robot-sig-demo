@@ -1,5 +1,5 @@
 """Contexte d'une maquette : risques (Géorisques), bâti (BDNB, pages de 10, bande autour de l'emprise, bâti ancien),
-niveau du cours d'eau en NGF (Hub'Eau), sources indépendantes, cache. Faux serveurs : aucun accès réseau."""
+niveau du cours d'eau en NGF (Hub'Eau), crues historiques (Vigicrues) comparées aux niveaux, sources indépendantes, cache. Faux serveurs : aucun accès réseau."""
 import httpx
 import pytest
 from pyproj import Transformer
@@ -70,6 +70,10 @@ def faux(pannes=()):
             return httpx.Response(200, json={"data": [{"code_station": "F1", "libelle_station": "L'Yvette à Villebon",
                                                         "libelle_cours_eau": "L'Yvette", "longitude_station": 2.23,
                                                         "latitude_station": 48.70, "altitude_ref_alti_station": 49.184}]})
+        if "vigicrues" in u:
+            return httpx.Response(200, json={"CdStationHydro": "F1", "VigilanceCrues": {"CruesHistoriques": [
+                {"LbUsuel": "Crue du 01/06/2016", "ValHauteur": 3.05, "ValDebit": 25.4},
+                {"LbUsuel": "Crue du 10/10/2024", "ValHauteur": 3.28, "ValDebit": 41}]}})
         if "observations_tr" in u:
             return httpx.Response(200, json={"data": [{"resultat_obs": 314.0, "date_obs": "2026-10-08T22:20:00Z"}]})
         return httpx.Response(404, json={})
@@ -138,3 +142,35 @@ def test_contexte_reel(cfg):
     from serveur.sig import reseau
     d = ctx.contexte(cfg, MAQUETTE, fabrique=reseau.client)
     assert d["risques"] and d["crue"] is not None
+
+
+def test_crues_historiques_en_ngf(cfg):
+    fab, _ = faux()
+    h = ctx.contexte(cfg, MAQUETTE, fabrique=fab)["crue"]["historiques"]
+    assert h["station"] == "L'Yvette à Villebon" and h["meme_cours_d_eau"]
+    # triées de la plus haute à la plus basse, zéro d'échelle 49,184 m NGF
+    assert [(c["libelle"], c["niveau_ngf"]) for c in h["crues"]] == [
+        ("Crue du 10/10/2024", pytest.approx(52.46, abs=0.01)), ("Crue du 01/06/2016", pytest.approx(52.23, abs=0.01))]
+
+
+def test_vigicrues_en_panne_ne_bloque_pas(cfg):
+    fab, _ = faux(pannes=("vigicrues",))
+    d = ctx.contexte(cfg, MAQUETTE, fabrique=fab)
+    assert d["crue"]["niveau_ngf"] is not None and d["crue"]["historiques"] is None
+    assert any(e.startswith("Vigicrues") for e in d["erreurs"])
+
+
+def test_face_a_l_eau_niveaux_sous_les_crues(cfg):
+    fab, _ = faux()
+    crue = ctx.contexte(cfg, MAQUETTE, fabrique=fab)["crue"]
+    niveaux = {"source": "étages IFC", "niveaux": [{"nom": "Quai", "altitude_ngf": 51.0}, {"nom": "RDC", "altitude_ngf": 62.0}]}
+    f = ctx.face_a_l_eau(crue, niveaux)
+    assert [r["libelle"] for r in f["references"]] == ["Niveau actuel", "Crue du 10/10/2024", "Crue du 01/06/2016"]
+    quai, rdc = f["niveaux"]
+    assert quai["marges_m"] == pytest.approx([1.5, -1.46, -1.23], abs=0.01)
+    assert quai["sous"] == ["Crue du 10/10/2024", "Crue du 01/06/2016"] and rdc["sous"] == []
+
+
+def test_face_a_l_eau_sans_station():
+    f = ctx.face_a_l_eau(None, {"source": None, "niveaux": [], "message": "maquette non positionnée"})
+    assert f["references"] == [] and f["niveaux"] == [] and f["message"] == "maquette non positionnée"

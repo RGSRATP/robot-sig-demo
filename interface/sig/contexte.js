@@ -42,7 +42,7 @@ export function sectionContexte(m, { carte, police }) {
   const b = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Risques, bâti environnant, cours d’eau' });
   const charger = async (actualiser = false) => {
     b.disabled = true;
-    zone.replaceChildren(el('p', { className: 'sig-info', textContent: 'Interrogation de Géorisques, de la BDNB et de Hub’Eau…' }));
+    zone.replaceChildren(el('p', { className: 'sig-info', textContent: 'Interrogation de Géorisques, de la BDNB, de Hub’Eau et de Vigicrues… (la première fois, lecture des étages de la maquette : jusqu’à quelques minutes)' }));
     try {
       const d = await lire(`maquettes/${m.id}/contexte`, actualiser ? { actualiser: 'true' } : {});
       installer(carte, police);
@@ -83,6 +83,7 @@ export function sectionContexte(m, { carte, police }) {
       + (c.marge_m != null ? `Point bas de la maquette : ${nf(c.point_bas_maquette_ngf)} m NGF, ${c.marge_m >= 0 ? `${nf(c.marge_m)} m au-dessus`
         : `${nf(-c.marge_m)} m sous`} du niveau actuel du cours d’eau${c.marge_m < 0 ? ' (ouvrage sous le niveau de l’eau : étanchéité, accès et ouvertures à examiner)' : ''}.` : '') })
       : el('p', { className: 'sig-info', textContent: 'Aucune station hydrométrique exploitable à proximité.' });
+    const eau = niveauxFaceALEau(d.face_a_l_eau, c, m.id);
     const carteCase = el('input', { type: 'checkbox', checked: true });
     carteCase.addEventListener('change', () => montrerSurCarte(carte, carteCase.checked ? d : null));
     montrerSurCarte(carte, d);
@@ -94,13 +95,56 @@ export function sectionContexte(m, { carte, police }) {
         el('a', { className: 'sig-bouton', href: `api/sig/maquettes/${m.id}/contexte?format=csv`, download: '', textContent: 'Bâti en CSV' })),
       el('h4', { textContent: 'Risques (Géorisques)' }), tr,
       el('h4', { textContent: 'Bâti environnant (BDNB)' }), ...bati,
-      el('h4', { textContent: 'Cours d’eau le plus proche (Hub’Eau)' }), crue,
+      el('h4', { textContent: 'Cours d’eau le plus proche (Hub’Eau, Vigicrues)' }), crue, ...eau,
       ...d.erreurs.map((e) => el('p', { className: 'sig-alerte', textContent: e })),
       el('p', { className: 'sig-info' }, `Données du ${dateCourte(d.date)} (cache 24 h) · `, actualiser,
         ' · Carte : bâti ancien en rouge (plus foncé au droit de l’ouvrage), autres bâtiments en gris, points à risque colorés par catégorie.'),
     ].filter(Boolean));
   }
   return [el('section', { className: 'sig-croisement' }, el('h4', { textContent: 'Contexte de l’ouvrage' }), b, zone)];
+}
+
+/** Niveaux de la maquette (plancher en m NGF) comparés au niveau actuel du cours d'eau et aux crues historiques. */
+function niveauxFaceALEau(eau, c, id) {
+  if (!eau) return [];
+  const h = c?.historiques;
+  const sortie = [h ? el('p', { textContent: `Crues historiques à ${h.station}${h.meme_cours_d_eau ? '' : ` (${h.cours_d_eau}, autre cours d’eau)`}, `
+      + `à ${nf(h.distance_km)} km : ` + h.crues.map((x) => `${x.libelle.replace('Crue du ', '')} ${nf(x.niveau_ngf)} m NGF (${nf(x.hauteur_m)} m à l’échelle)`).join(' · ') })
+    : el('p', { className: 'sig-info', textContent: 'Aucune crue historique publiée par Vigicrues pour les stations voisines.' })];
+  if (!eau.niveaux.length) {
+    sortie.push(el('p', { className: 'sig-info', textContent: `Niveaux de la maquette : ${eau.message || 'aucun'}.` }));
+    return sortie;
+  }
+  if (!eau.references.length) return sortie;
+  const table = el('table', { className: 'sig-attributs sig-niveaux-eau' });
+  const tete = table.insertRow();
+  for (const t of ['Niveau', 'Altitude NGF', ...eau.references.map((r) => `${r.libelle.replace('Crue du ', 'Crue ')} (${nf(r.niveau_ngf)})`)]) {
+    tete.insertCell().textContent = t;
+  }
+  for (const n of [...eau.niveaux].reverse()) {   // du plus haut au plus bas, comme une coupe
+    const tr = table.insertRow();
+    tr.insertCell().textContent = n.nom;
+    tr.insertCell().textContent = `${nf(n.altitude_ngf)} m`;
+    for (const m of n.marges_m) {
+      const td = tr.insertCell();
+      td.textContent = `${m >= 0 ? '+' : '−'}${nf(Math.abs(m))} m`;
+      td.style.color = m < 0 ? '#c92a2a' : '#2b8a3e';
+      if (m < 0) td.style.fontWeight = '600';
+    }
+  }
+  const sous = eau.niveaux.filter((n) => n.sous.length);
+  sortie.push(
+    el('div', { className: 'sig-croisement__tete' },
+      el('strong', { textContent: sous.length ? `${sous.length} niveau(x) sur ${eau.niveaux.length} sous au moins une référence`
+        : `Aucun des ${eau.niveaux.length} niveaux sous les références` }),
+      el('a', { className: 'sig-bouton', href: `api/sig/maquettes/${id}/contexte?format=csv_niveaux`, download: '', textContent: 'CSV' })),
+    el('div', { className: 'sig-tableau-defilant' }, table),
+    el('p', { className: 'sig-info', textContent: `Altitudes : ${{ locaux: 'bas des locaux de chaque niveau', 'modèle 3D': 'points bas et haut du modèle 3D (ni étage ni local dans la maquette)' }[eau.source] || 'placement des étages IFC'}, `
+      + 'en m NGF (terrain IGN + calage de la maquette). Marge = altitude − niveau de l’eau à la station (en rouge : plus bas que l’eau). '
+      + 'Comparaison d’altitudes seulement : la ligne d’eau varie le long du cours d’eau, les protections, le cheminement de l’eau et '
+      + 'l’étanchéité ne sont pas pris en compte ; les crues anciennes sont converties avec le zéro d’échelle actuel.' }),
+  );
+  return sortie;
 }
 
 /** Section « Carbone » de la fiche d'une maquette : ordre de grandeur par matériau, fiabilité, export CSV. */

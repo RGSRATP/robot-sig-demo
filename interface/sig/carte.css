@@ -238,6 +238,10 @@ p.sig-etiquette { margin: 0 0 6px; }
 .sig-dl dt { color: var(--sig-gris); }
 .sig-dl dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .sig-attributs { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sig-tableau-defilant { overflow-x: auto; max-width: 100%; }
+.sig-niveaux-eau td { white-space: nowrap; }
+.sig-niveaux-eau tr:first-child td { font-weight: 600; white-space: normal; }
+.sig-niveaux-eau td:first-child { width: auto; }
 .sig-attributs td { border-bottom: 1px solid var(--sig-trait-2); padding: 4px 4px; vertical-align: top; overflow-wrap: anywhere; }
 .sig-attributs td:first-child { color: var(--sig-gris); width: 42%; }
 .sig-attributs tr:hover td { background: var(--sig-fond-2); }

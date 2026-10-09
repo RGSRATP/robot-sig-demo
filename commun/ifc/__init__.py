@@ -8,6 +8,7 @@ Contenu :
 - geometrie : modèles 3D allégés (GLB) et emprise au sol, convertis par web-ifc (convertisseur/, Node) ;
 - proprietes : Psets génériques et index SQLite des objets (consultation sans rouvrir la maquette) ;
 - locaux : IfcSpace (codes « Données d'identification » SGP_DI_*, niveau, emprise au sol, altitudes).
+  Étages (IfcBuildingStorey) et leur altitude en coordonnées locales.
 """
 from __future__ import annotations
 

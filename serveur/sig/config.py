@@ -76,6 +76,9 @@ def _controler(cfg: dict, chemin: Path) -> dict:
                                                               "annee_bati_ancien", "max_batiments", "rayon_station_km")):
             raise erreur("section « contexte » incomplète (dossier_cache, georisques, bdnb, hubeau : textes ; cache_heures, rayon_m, "
                          "rayon_inondation_m, tampon_bati_m, annee_bati_ancien, max_batiments, rayon_station_km : nombres > 0)")
+        if (cx.get("vigicrues") is not None and not isinstance(cx["vigicrues"], str))                 or not all(cx.get(k) is None or _nombre(cx[k], True) for k in ("max_stations_vigicrues", "delai_etages_s")):
+            raise erreur("section « contexte » : « vigicrues » doit être une URL, « max_stations_vigicrues » et "
+                         "« delai_etages_s » des nombres > 0 (clés facultatives)")
 
     if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
         raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")

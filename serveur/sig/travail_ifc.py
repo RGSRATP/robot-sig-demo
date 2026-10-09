@@ -3,7 +3,8 @@ r"""Traitement d'une maquette dans un processus séparé : analyse, modèle 3D +
 Lancé par serveur/sig/maquettes.py :
     python -m serveur.sig.travail_ifc <fichier.ifc> <dossier_sortie> <parametres.json>
 
-Tâches : « complet » (modèle 3D, propriétés, locaux) ou « locaux » seuls (maquette déjà traitée).
+Tâches : « complet » (modèle 3D, propriétés, locaux, étages), « locaux » seuls (maquette déjà traitée) ou « etages »
+seuls (altitudes des IfcBuildingStorey, demandées par le contexte d'une maquette traitée avant le lot 5).
 Écrit dans le dossier de sortie : etat.json (avancement), modele.glb et detail.glb (convertisseur web-ifc, lancé
 en parallèle de la lecture IfcOpenShell), proprietes.sqlite, locaux.json, puis resultat.json en dernier (sa présence signifie « traitement terminé »). Un processus séparé isole la mémoire et les
 plantages éventuels d'IfcOpenShell : le serveur reste disponible.
@@ -95,6 +96,19 @@ def traiter(ifc: Path, sortie: Path, params: dict) -> dict:
 def _ecrire_locaux(f, decalage, sortie: Path, params: dict, progression) -> None:
     liste = locaux.locaux(f, decalage, progression=progression)
     _ecrire(sortie / "locaux.json", {"cle": params["cle_locaux"], "locaux": liste, "niveaux": locaux.niveaux(liste)})
+    _ecrire_etages(f, decalage, sortie, params)
+
+
+def _ecrire_etages(f, decalage, sortie: Path, params: dict) -> None:
+    if params.get("cle_etages"):
+        _ecrire(sortie / "etages.json", {"cle": params["cle_etages"], "etages": locaux.etages(f, decalage)})
+
+
+def traiter_etages(ifc: Path, sortie: Path, params: dict) -> None:
+    """Étages seuls (lecture du fichier, sans géométrie)."""
+    f = lecture.ouvrir(ifc)
+    brut = lecture.georef_brut(f)
+    _ecrire_etages(f, brut["site"]["origine"] if brut.get("site") else [0.0, 0.0, 0.0], sortie, params)
 
 
 def traiter_locaux(ifc: Path, sortie: Path, params: dict) -> None:
@@ -119,6 +133,13 @@ def main(argv: list[str]) -> int:
     # un serveur plus ancien ne transmet pas la clé des locaux : même règle que serveur/sig/maquettes.cle_locaux
     params.setdefault("cle_locaux", f"{params['cle']}-locaux{VERSION_LOCAUX}")
     locaux_seuls = params.get("tache") == "locaux"
+    if params.get("tache") == "etages":   # échec : simple absence d'etages.json, signalée par le serveur
+        try:
+            traiter_etages(ifc, sortie, params)
+            return 0
+        except Exception:
+            traceback.print_exc()
+            return 1
     try:
         (traiter_locaux if locaux_seuls else traiter)(ifc, sortie, params)
         return 0
