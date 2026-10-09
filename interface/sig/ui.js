@@ -1,5 +1,10 @@
 // Structure de l'écran (inspirée des visionneuses cartographiques web) : bandeau, barres d'actions à gauche
 // et à droite, volets repliables, zone carte, pied de page. Aucune logique métier ici.
+import '@fontsource/montserrat/latin-600.css';   // titres (charte RATP : Montserrat), servie localement
+import '@fontsource/montserrat/latin-700.css';
+
+const LOGO_RATP = new URL('./charte/ratp-infrastructures.svg', import.meta.url).href;
+const LOGO_SYNERGIE = new URL('./charte/synergie.png', import.meta.url).href;
 
 const TRACES = {
   couches: 'M12 3 2 8l10 5 10-5-10-5Z M2 12.5l10 5 10-5 M2 17l10 5 10-5',
@@ -108,17 +113,18 @@ class Volet {
 }
 
 // Coque complète ; renvoie les points d'accroche des modules.
-export function creerCoque(conteneur, { titre, sousTitre }) {
+export function creerCoque(conteneur, { titre, sousTitre }) {   // identité : charte RATP (logos dans charte/)
   let surRedimension = () => {};
   const gauche = new Volet('gauche', () => surRedimension());
   const droite = new Volet('droite', () => surRedimension());
   const etat = el('div', { className: 'sig-entete__etat' });
   const entete = el('header', { className: 'sig-entete' },
     el('div', { className: 'sig-entete__marque' },
-      el('span', { className: 'sig-logo', ariaHidden: 'true' }),
+      el('img', { className: 'sig-entete__logo-projet', src: LOGO_SYNERGIE, alt: 'Synergie' }),
       el('span', { className: 'sig-entete__titre', textContent: titre }),
-      sousTitre ? el('span', { className: 'sig-entete__sous', textContent: sousTitre }) : null),
-    etat);
+      el('span', { className: 'sig-entete__sous', textContent: sousTitre || '', hidden: !sousTitre })),
+    el('div', { className: 'sig-entete__droite' }, etat,
+      el('img', { className: 'sig-entete__logo-ratp', src: LOGO_RATP, alt: 'RATP Infrastructures' })));
   const zone = el('main', { className: 'sig-zone' });
   const pied = el('footer', { className: 'sig-pied' });
   const app = el('div', { className: 'sig-app' }, entete, gauche.barre, gauche.racine, zone, droite.racine, droite.barre, pied);
@@ -126,6 +132,15 @@ export function creerCoque(conteneur, { titre, sousTitre }) {
   return {
     app, entete, etat, zone, pied, gauche, droite,
     surRedimension(f) { surRedimension = f; },
+    /** Nom de l'application (config/sig.yaml, « application ») : bandeau et onglet du navigateur. */
+    nommer(nom, sous) {
+      if (nom) {
+        entete.querySelector('.sig-entete__titre').textContent = nom;
+        document.title = nom;
+      }
+      const s = entete.querySelector('.sig-entete__sous');
+      if (sous != null) { s.textContent = sous; s.hidden = !sous; }
+    },
     pastille(texte, classe = '') {
       const p = el('span', { className: `sig-pastille-etat ${classe}`, textContent: texte });
       etat.append(p);

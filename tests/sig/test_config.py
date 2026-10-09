@@ -224,3 +224,8 @@ def test_zoom_et_champ_de_vision_invalides(tmp_path, ligne, attendu):
     p.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
     with pytest.raises(cfg_sig.ConfigInvalide, match=attendu):
         cfg_sig.charger_config(p)
+
+
+def test_nom_de_l_application_transmis_a_l_interface():
+    cfg = cfg_sig.charger_config()
+    assert cfg_sig.config_carte(cfg)["application"]["nom"] == "Synergie-SIG-BDM-POC"

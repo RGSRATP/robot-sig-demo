@@ -1,5 +1,10 @@
 # Configuration du module SIG — aucun de ces paramètres ne doit être en dur dans le code.
 
+# Nom et sous-titre affichés dans le bandeau et l'onglet du navigateur
+application:
+  nom: "Synergie-SIG-BDM-POC"
+  sous_titre: "Carte, couches SIG et maquettes BIM"
+
 carte:
   centre_wgs84: [2.35, 48.85]   # Île-de-France
   zoom_initial: 10

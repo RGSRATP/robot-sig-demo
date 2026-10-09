@@ -206,7 +206,7 @@ function piedDePage(pied, carte) {
 // ---------------------------------------------------------------- montage
 
 export async function monterCarte(conteneur) {
-  const coque = creerCoque(conteneur, { titre: 'Démonstrateur SIG · BIM', sousTitre: 'Carte, couches et maquettes IFC' });
+  const coque = creerCoque(conteneur, { titre: document.title, sousTitre: '' });   // nom définitif lu dans la configuration
   const message = bandeau(coque.zone);
   const g = coque.gauche;
   const d = coque.droite;
@@ -228,6 +228,7 @@ export async function monterCarte(conteneur) {
   let cfg;
   try {
     cfg = await lire('config/carte');
+    coque.nommer(cfg.application?.nom, cfg.application?.sous_titre);
   } catch (e) {
     message.montrer(`Configuration de la carte indisponible : ${e.message}. Vérifiez que le serveur est lancé et config/sig.yaml.`, true);
     return null;

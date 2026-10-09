@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import RACINE
 from .routes import VERSION, routeur
 
-app = FastAPI(title="Démonstrateur SIG", version=VERSION)
+app = FastAPI(title="Synergie-SIG-BDM-POC", version=VERSION)
 app.include_router(routeur)
 # listes de maquettes et emprises : texte JSON très compressible (à reprendre dans l'application du patrimoine)
 app.add_middleware(GZipMiddleware, minimum_size=2000)

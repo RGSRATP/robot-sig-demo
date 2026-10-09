@@ -381,6 +381,7 @@ def config_carte(cfg: dict) -> dict:
     """Paramètres utiles à l'interface : centre, zoom et fonds IGN, dans l'ordre du fichier."""
     fonds = cfg["fonds_ign"]
     return {
+        "application": cfg.get("application") or {},
         "centre_wgs84": cfg["carte"]["centre_wgs84"],
         "zoom_initial": cfg["carte"]["zoom_initial"],
         "zoom_max": cfg["carte"].get("zoom_max", 22),

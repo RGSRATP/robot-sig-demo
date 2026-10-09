@@ -2,7 +2,7 @@
   "name": "demonstrateur-sig-interface",
   "private": true,
   "version": "0.1.0",
-  "description": "Interface du démonstrateur SIG : carte MapLibre sur fond IGN (code métier dans sig/)",
+  "description": "Interface de Synergie-SIG-BDM-POC (démonstrateur SIG) : carte MapLibre sur fond IGN (code métier dans sig/)",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/montserrat": "5.3.0",
     "copc": "0.0.9",
     "laz-perf": "0.0.7",
     "maplibre-gl": "6.12.0",

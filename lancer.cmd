@@ -1,5 +1,5 @@
 @echo off
-rem Lance le démonstrateur SIG : construit l'interface si besoin, démarre le serveur et ouvre le navigateur.
+rem Lance Synergie-SIG-BDM-POC (démonstrateur SIG) : construit l'interface si besoin, démarre le serveur et ouvre le navigateur.
 rem L'interface est reconstruite automatiquement si une source est plus récente que la dernière construction.
 rem Pour forcer la reconstruction : « lancer build ».
 chcp 65001 > nul
@@ -88,7 +88,7 @@ if defined PID (
 )
 
 echo.
-echo Démonstrateur SIG : http://127.0.0.1:8000/   (fermer cette fenêtre ou Ctrl+C pour arrêter)
+echo Synergie-SIG-BDM-POC : http://127.0.0.1:8000/   (fermer cette fenêtre ou Ctrl+C pour arrêter)
 echo.
 start "" "http://127.0.0.1:8000/"
 ".venv\Scripts\python.exe" -m uvicorn serveur.sig.app:app --port 8000
