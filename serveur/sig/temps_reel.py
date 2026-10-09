@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from pyproj import Transformer
+from shapely.geometry import box, mapping, shape
 
 from . import reseau
 
@@ -213,7 +214,32 @@ def _noms_lignes(src: dict, client: httpx.Client, ref: dict, passages: list) -> 
         p["ligne"] = noms.get(code, code)
 
 
-LECTEURS = {"gbfs": _gbfs, "hubeau_hydrometrie": _hubeau, "open_meteo": _meteo, "idfm_prochains_passages": _idfm}
+NIVEAUX_VIGILANCE = {1: "Vert", 2: "Jaune", 3: "Orange", 4: "Rouge"}   # nomenclature Vigicrues (pas un paramètre métier)
+
+
+def _vigicrues(src: dict, client: httpx.Client, ref: dict) -> tuple[list, str | None, list]:
+    """Vigilance crues par tronçon (Vigicrues, GeoJSON national) : tronçons qui recoupent l'emprise, simplifiés."""
+    d = _json(client, src["url"], follow_redirects=True)
+    zone = box(*src["emprise_wgs84"])
+    tol = src.get("simplification_deg", 0.0005)
+    feats, avert = [], []
+    for f in d.get("features", []):
+        p = f.get("properties") or {}
+        try:
+            g = shape(f["geometry"])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            avert.append(f"tronçon {p.get('lbentcru') or p.get('CdEntCru')} : géométrie illisible, ignoré")
+            continue
+        if not g.intersects(zone):
+            continue
+        niveau = p.get("NivInfViCr")
+        feats.append({"type": "Feature", "geometry": mapping(g.simplify(tol)), "properties": {
+            "troncon": p.get("lbentcru"), "code": p.get("CdEntCru"), "niveau": niveau,
+            "vigilance": NIVEAUX_VIGILANCE.get(niveau, "inconnue")}})
+    return feats, None, avert
+
+
+LECTEURS = {"vigicrues_vigilance": _vigicrues, "gbfs": _gbfs, "hubeau_hydrometrie": _hubeau, "open_meteo": _meteo, "idfm_prochains_passages": _idfm}
 
 
 # ---------------------------------------------------------------- cache et accès

@@ -70,6 +70,13 @@ def faux(pannes=()):
             return httpx.Response(200, json={"data": [{"code_station": "F1", "libelle_station": "L'Yvette à Villebon",
                                                         "libelle_cours_eau": "L'Yvette", "longitude_station": 2.23,
                                                         "latitude_station": 48.70, "altitude_ref_alti_station": 49.184}]})
+        if "observations.json" in u:
+            obs = [{"DtObsHydro": f"2026-10-0{j}T0{h}:{mn}:00+00:00", "ResObsHydro": 0.3 + j / 10}
+                   for j in (7, 8) for h in (1, 2) for mn in ("00", "30")] + [{"DtObsHydro": "2020-01-01T00:00:00+00:00", "ResObsHydro": 9}]
+            return httpx.Response(200, json={"Serie": {"ObssHydro": obs}})
+        if "previsions.json" in u:
+            return httpx.Response(200, json={"Simul": {"Prevs": [
+                {"DtPrev": "2026-10-09T12:00:00+00:00", "ResMoyPrev": 2.0, "ResMinPrev": 1.5, "ResMaxPrev": 2.5}]}})
         if "vigicrues" in u:
             return httpx.Response(200, json={"CdStationHydro": "F1", "VigilanceCrues": {"CruesHistoriques": [
                 {"LbUsuel": "Crue du 01/06/2016", "ValHauteur": 3.05, "ValDebit": 25.4},
@@ -174,3 +181,39 @@ def test_face_a_l_eau_niveaux_sous_les_crues(cfg):
 def test_face_a_l_eau_sans_station():
     f = ctx.face_a_l_eau(None, {"source": None, "niveaux": [], "message": "maquette non positionnée"})
     assert f["references"] == [] and f["niveaux"] == [] and f["message"] == "maquette non positionnée"
+
+
+def test_hydrogramme_en_ngf_heure_par_heure(cfg, monkeypatch):
+    fab, _ = faux()
+    monkeypatch.setattr(ctx, "_hydro_cache", {})
+    crue = ctx.contexte(cfg, MAQUETTE, fabrique=fab)["crue"]
+    h = ctx.hydrogramme(cfg, crue, {"source": "étages IFC", "niveaux": [{"nom": "Quai", "altitude_ngf": 51.0}]}, fabrique=fab,
+                        horloge=lambda: 1.0)
+    assert h["source"] == "Vigicrues" and h["station"] == "L'Yvette à Villebon"
+    # 8 mesures sur 4 heures → 4 points, la dernière de chaque heure ; la mesure de 2020 est hors période
+    assert len(h["observations"]) == 4 and h["observations"][0] == ["2026-10-07T01:30:00+00:00", pytest.approx(49.184 + 1.0)]
+    assert h["previsions"] == [["2026-10-09T12:00:00+00:00", pytest.approx(51.184), pytest.approx(50.684), pytest.approx(51.684)]]
+    assert h["crues"][0]["niveau_ngf"] == pytest.approx(52.46, abs=0.01) and h["niveaux"][0]["nom"] == "Quai"
+
+
+def test_hydrogramme_sans_vigicrues_passe_par_hubeau(cfg, monkeypatch):
+    fab, appels = faux(pannes=("observations.json", "previsions.json"))
+    monkeypatch.setattr(ctx, "_hydro_cache", {})
+    crue = ctx.contexte(cfg, MAQUETTE, fabrique=fab)["crue"]
+    h = ctx.hydrogramme(cfg, crue, {"niveaux": []}, fabrique=fab)
+    assert h["source"] == "Hub'Eau" and len(h["observations"]) == 1
+    assert any("prévisions" in e for e in h["erreurs"])
+
+
+def test_hydrogramme_sans_station():
+    assert ctx.hydrogramme({"contexte": {}}, None, {})["erreurs"]
+
+
+def test_vigilance_du_troncon_le_plus_proche():
+    lon, lat = _wgs.transform(645460, 6847460)
+    ligne = lambda x: {"type": "LineString", "coordinates": [list(_wgs.transform(x, 6847000)), list(_wgs.transform(x, 6848000))]}
+    feats = [{"geometry": ligne(646460), "properties": {"troncon": "Yvette", "niveau": 2, "vigilance": "Jaune"}},
+             {"geometry": ligne(650460), "properties": {"troncon": "Seine", "niveau": 1, "vigilance": "Vert"}}]
+    v = ctx.vigilance_proche(feats, lon, lat, 5)
+    assert v["troncon"] == "Yvette" and v["distance_km"] == pytest.approx(1.0, abs=0.01)
+    assert ctx.vigilance_proche(feats, lon, lat, 0.5) is None

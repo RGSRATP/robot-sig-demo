@@ -384,3 +384,25 @@ a.sig-bouton { text-decoration: none; display: inline-block; }
 
 /* Contexte d'une maquette : niveau de risque */
 .sig-niveau-risque { display: inline-block; padding: 0 6px; border-radius: 8px; color: #fff; font-size: 11px; font-weight: 600; }
+
+/* Courbe du niveau de l'eau (fiche d'une maquette, contexte) */
+.sig-courbe-eau { --eau: #2a78d6; --ouvrage: #eb6834; --encre-2: #52514e; --grille: #e6e6e3; margin-top: 8px; }
+.sig-courbe-eau__cadre { position: relative; }
+.sig-courbe-eau__svg { width: 100%; height: auto; display: block; font-size: 11px; }
+.sig-courbe-eau__svg .grille { stroke: var(--grille); stroke-width: 1; }
+.sig-courbe-eau__svg .axe { fill: var(--encre-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.sig-courbe-eau__svg .observe { fill: none; stroke: var(--eau); stroke-width: 2; stroke-linejoin: round; }
+.sig-courbe-eau__svg .prevision { fill: none; stroke: var(--eau); stroke-width: 2; stroke-dasharray: 5 4; }
+.sig-courbe-eau__svg .prevision-bande { fill: var(--eau); opacity: 0.15; }
+.sig-courbe-eau__svg .crue { stroke: var(--encre-2); stroke-width: 1; stroke-dasharray: 4 3; }
+.sig-courbe-eau__svg .niveau { stroke: var(--ouvrage); stroke-width: 1.5; }
+.sig-courbe-eau__svg .etiq-crue, .sig-courbe-eau__svg .etiq-niveau { fill: #1f2328; font-size: 10.5px; }
+.sig-courbe-eau__svg .point-actuel { fill: var(--eau); stroke: #ffffff; stroke-width: 2; }
+.sig-courbe-eau__svg .reticule { stroke: var(--encre-2); stroke-width: 1; }
+.sig-courbe-eau__bulle { position: absolute; pointer-events: none; background: #ffffff; border: 1px solid var(--grille);
+  border-radius: 4px; padding: 4px 6px; font-size: 11px; box-shadow: 0 2px 6px rgb(0 0 0 / 12%); white-space: nowrap; }
+.sig-courbe-eau__legende { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.sig-courbe-eau__trait { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--eau); vertical-align: middle; margin-right: 4px; }
+.sig-courbe-eau__trait--prevision { border-top-style: dashed; }
+.sig-courbe-eau__trait--crue { border-top: 1px dashed var(--encre-2); }
+.sig-courbe-eau__trait--niveau { border-top: 2px solid var(--ouvrage); }

@@ -16,6 +16,17 @@ function couches(s, police) {
     paint: { 'text-color': '#1f2328', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 } });
   const cercle = (paint) => ({ id: `${src}-points`, type: 'circle', source: src,
     paint: { 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5, ...paint } });
+  if (s.type === 'vigicrues_vigilance') {   // tronçons de cours d'eau colorés par niveau de vigilance
+    return [{ id: `${src}-points`, type: 'line', source: src, layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ['match', ['get', 'niveau'], 1, COULEURS_VIGILANCE[0], 2, COULEURS_VIGILANCE[1], 3,
+        COULEURS_VIGILANCE[2], 4, COULEURS_VIGILANCE[3], '#adb5bd'],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 8, ['+', 2, ['get', 'niveau']], 14, ['+', 5, ['*', 2, ['get', 'niveau']]]],
+      'line-opacity': 0.8 } },
+    { id: `${src}-texte`, type: 'symbol', source: src, minzoom: 9,
+      layout: { 'symbol-placement': 'line', 'text-field': ['concat', ['get', 'troncon'], ' · ', ['get', 'vigilance']],
+        'text-font': [police], 'text-size': 11 },
+      paint: { 'text-color': '#1f2328', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 } }];
+  }
   if (s.type === 'gbfs') {
     return [cercle({
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 2.5, 16, 7],
@@ -39,7 +50,10 @@ function couches(s, police) {
     texte(['case', ['has', 'prochain_min'], ['concat', ['get', 'gare'], ' · ', ['to-string', ['get', 'prochain_min']], ' min'], ['get', 'gare']], 11)];
 }
 
+const COULEURS_VIGILANCE = ['#2f9e44', '#fcc419', '#f76707', '#e03131'];   // vert, jaune, orange, rouge (Vigicrues)
 const LEGENDES = {
+  vigicrues_vigilance: [[COULEURS_VIGILANCE[0], 'vert : pas de vigilance'], [COULEURS_VIGILANCE[1], 'jaune : risque de crue'],
+    [COULEURS_VIGILANCE[2], 'orange : crue importante'], [COULEURS_VIGILANCE[3], 'rouge : crue majeure']],
   gbfs: [['#2f9e44', '5 vélos ou plus'], ['#f59f00', '1 à 4 vélos'], ['#e03131', 'aucun vélo'], ['#adb5bd', 'station fermée']],
   hubeau_hydrometrie: [['#1c7ed6', "hauteur d'eau (m)"]],
   open_meteo: [['#4dabf7', '≤ 0 °C'], ['#ffe066', '12 °C'], ['#e03131', '≥ 30 °C']],
@@ -124,7 +138,7 @@ export class GestionnaireTempsReel {
       if (s.chargement && !d) lignes.push('chargement…');
       if (d && (d.features.length || !d.erreur)) {
         const age = d.date_maj ? Math.round((Date.now() - new Date(d.date_maj)) / 60000) : null;
-        lignes.push(`${d.features.length} point(s) · données du ${dateCourte(d.date_donnees || d.date_maj)}`
+        lignes.push(`${d.features.length} ${s.cfg.type === 'vigicrues_vigilance' ? 'tronçon(s)' : 'point(s)'} · données du ${dateCourte(d.date_donnees || d.date_maj)}`
           + (age != null ? ` · lu il y a ${age < 1 ? "moins d'une" : age} min` : ''));
       }
     }

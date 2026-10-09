@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -293,6 +293,101 @@ def face_a_l_eau(crue: dict | None, niveaux: dict) -> dict:
         marges = [round(n["altitude_ngf"] - r["niveau_ngf"], 2) for r in refs]
         lignes.append({**n, "marges_m": marges, "sous": [r["libelle"] for r, m in zip(refs, marges) if m < 0]})
     return {"references": refs, "niveaux": lignes, "source": niveaux.get("source"), "message": niveaux.get("message")}
+
+
+# ---------------------------------------------------------------- hydrogramme (Vigicrues, Hub'Eau)
+
+_hydro_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _par_heure(points: list[tuple[str, float]]) -> list[list]:
+    """Une valeur par heure (la dernière de l'heure) : ~720 points pour 30 jours au lieu de ~9 000."""
+    vus: dict[str, list] = {}
+    for date, v in sorted(points):
+        vus[date[:13]] = [date, v]
+    return list(vus.values())
+
+
+def _observations(cx: dict, client: httpx.Client, code: str, jours: int) -> tuple[list, str]:
+    """Hauteurs observées (m à l'échelle) des derniers jours : Vigicrues, sinon Hub'Eau (un mois au plus)."""
+    debut = (datetime.now(timezone.utc) - timedelta(days=jours)).isoformat(timespec="seconds")
+    if cx.get("vigicrues_observations"):
+        try:
+            d = _get(client, cx["vigicrues_observations"], params={"CdStationHydro": code, "FormatDate": "iso"})
+            obs = [(o["DtObsHydro"], float(o["ResObsHydro"])) for o in (d.get("Serie") or {}).get("ObssHydro") or []
+                   if o.get("ResObsHydro") is not None and o.get("DtObsHydro", "") >= debut[:19]]
+            if obs:
+                return obs, "Vigicrues"
+        except (ErreurContexte, KeyError, TypeError, ValueError):
+            pass
+    d = _get(client, f"{cx['hubeau']}/observations_tr", params={
+        "code_entite": code, "grandeur_hydro": "H", "date_debut_obs": debut, "size": 20000, "sort": "asc",
+        "fields": "date_obs,resultat_obs"})
+    return [(o["date_obs"], o["resultat_obs"] / 1000) for o in d.get("data", []) if o.get("resultat_obs") is not None], "Hub'Eau"
+
+
+def _previsions(cx: dict, client: httpx.Client, code: str) -> list:
+    """Prévisions de hauteur publiées par Vigicrues (en période de crue seulement) : [date, moyenne, min, max]."""
+    if not cx.get("vigicrues_previsions"):
+        return []
+    d = _get(client, cx["vigicrues_previsions"], params={"CdStationHydro": code, "FormatDate": "iso"})
+    out = []
+    for p in (d.get("Simul") or {}).get("Prevs") or []:
+        moy = p.get("ResMoyPrev")
+        if p.get("DtPrev") and isinstance(moy, (int, float)):
+            out.append([p["DtPrev"], float(moy), p.get("ResMinPrev"), p.get("ResMaxPrev")])
+    return sorted(out)
+
+
+def hydrogramme(cfg: dict, crue: dict | None, niveaux: dict, fabrique=None, horloge=time.time) -> dict:
+    """Niveau du cours d'eau (m NGF) sur « jours_hydrogramme » jours et prévisions, à la station qui publie les crues
+    historiques (sinon la plus proche), avec les crues historiques et les niveaux de la maquette, sur une même
+    échelle d'altitude. Gardé « periode_hydrogramme_s » secondes en mémoire."""
+    cx = cfg["contexte"]
+    if not crue:
+        return {"station": None, "erreurs": ["aucune station hydrométrique exploitable à proximité"]}
+    h = crue.get("historiques")
+    code, zero = (h["code"], h["zero_echelle_ngf"]) if h else (crue["code"], crue.get("zero_echelle_ngf"))
+    nom, riviere = (h["station"], h["cours_d_eau"]) if h else (crue["station"], crue.get("cours_d_eau"))
+    if zero is None:
+        return {"station": nom, "erreurs": [f"altitude du zéro d'échelle inconnue pour {nom} : courbe en NGF impossible"]}
+    jours = int(cx.get("jours_hydrogramme", 30))
+    connu = _hydro_cache.get(code)
+    if connu and horloge() - connu[0] < cx.get("periode_hydrogramme_s", 600):
+        serie = connu[1]
+    else:
+        serie = {"observations": [], "previsions": [], "source": None, "erreurs": []}
+        with (fabrique or reseau.client)(cfg) as client:
+            try:
+                obs, serie["source"] = _observations(cx, client, code, jours)
+                serie["observations"] = [[d, round(zero + v, 3)] for d, v in _par_heure(obs)]
+            except (ErreurContexte, KeyError, TypeError, ValueError) as e:
+                serie["erreurs"].append(f"hauteurs observées : {e}")
+            try:
+                serie["previsions"] = [[d, round(zero + m, 3), None if lo is None else round(zero + lo, 3),
+                                        None if hi is None else round(zero + hi, 3)] for d, m, lo, hi in _previsions(cx, client, code)]
+            except (ErreurContexte, KeyError, TypeError, ValueError) as e:
+                serie["erreurs"].append(f"prévisions Vigicrues : {e}")
+        _hydro_cache[code] = (horloge(), serie)
+    return {"station": nom, "cours_d_eau": riviere, "code": code, "zero_echelle_ngf": zero, "jours": jours,
+            "source": serie["source"], "observations": serie["observations"], "previsions": serie["previsions"],
+            "crues": (h or {}).get("crues", []), "niveaux": niveaux.get("niveaux", []), "source_niveaux": niveaux.get("source"),
+            "erreurs": list(serie["erreurs"])}
+
+
+def vigilance_proche(feats: list[dict], lon: float, lat: float, rayon_km: float) -> dict | None:
+    """Tronçon Vigicrues le plus proche du point (dans le rayon) : nom, niveau, distance."""
+    x0, y0 = _vers_l93.transform(lon, lat)
+    p0 = shape({"type": "Point", "coordinates": [x0, y0]})
+    meilleur = None
+    for f in feats:
+        try:
+            d = transform(_vers_l93.transform, shape(f["geometry"])).distance(p0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if d <= rayon_km * 1000 and (meilleur is None or d < meilleur[0]):
+            meilleur = (d, f["properties"])
+    return None if meilleur is None else {**meilleur[1], "distance_km": round(meilleur[0] / 1000, 2)}
 
 
 # ---------------------------------------------------------------- assemblage et cache

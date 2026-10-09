@@ -246,6 +246,7 @@ CLES_TEMPS_REEL = {
     "hubeau_hydrometrie": ("url", "emprise_wgs84", "heures"),
     "open_meteo": ("url", "emprise_wgs84", "pas_deg"),
     "idfm_prochains_passages": ("url", "url_zones", "jeton_env", "zones_arret", "horizon_min"),
+    "vigicrues_vigilance": ("url", "emprise_wgs84"),
 }
 
 

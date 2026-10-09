@@ -118,6 +118,11 @@ export function afficherTempsReel(p, source, fermeture) {
     paires = [["Cours d'eau", p.cours_d_eau], ['Hauteur', p.hauteur_m != null ? `${nf(p.hauteur_m, 3)} m` : null],
       ['Observation', dateCourte(p.observation)], ['Code station', p.code]];
     extra.push(el('p', { className: 'sig-info', textContent: "Hauteur à l'échelle de la station (zéro propre à chaque station, pas une altitude NGF)." }));
+  } else if (source.type === 'vigicrues_vigilance') {
+    titre = `${p.troncon} · vigilance ${String(p.vigilance).toLowerCase()}`;
+    paires = [['Tronçon', p.troncon], ['Code', p.code], ['Vigilance', p.vigilance]];
+    extra.push(el('p', { className: 'sig-info', textContent: 'Niveau de vigilance crues publié par Vigicrues pour ce tronçon. '
+      + 'Détail et prévisions : vigicrues.gouv.fr. Courbe de hauteur face aux niveaux d’un ouvrage : fiche de la maquette, « Contexte de l’ouvrage ».' }));
   } else if (source.type === 'open_meteo') {
     titre = `Météo · ${p.temps}`;
     paires = [['Température', `${nf(p.temperature_c, 1)} °C`], ['Précipitations', `${nf(p.precipitation_mm, 1)} mm`],

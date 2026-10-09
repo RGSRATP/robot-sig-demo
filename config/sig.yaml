@@ -106,7 +106,8 @@ lidar:
 # Données en temps réel (lot 5) : interrogées par le serveur à travers le proxy (section « reseau »), gardées en
 # mémoire pendant « periode_s », puis relues à la demande de l'interface. Une source injoignable garde sa dernière
 # réponse, datée, avec un message. Types : gbfs (vélos en libre-service), hubeau_hydrometrie (hauteurs d'eau),
-# open_meteo (météo actuelle sur une grille), idfm_prochains_passages (PRIM, clé dans .env via « jeton_env »).
+# open_meteo (météo actuelle sur une grille), idfm_prochains_passages (PRIM, clé dans .env via « jeton_env »),
+# vigicrues_vigilance (vigilance crues par tronçon de cours d'eau).
 temps_reel:
   - id: velib
     type: gbfs
@@ -142,6 +143,15 @@ temps_reel:
     horizon_min: 60                         # passages affichés dans l'heure
     periode_s: 60
     attribution: "Île-de-France Mobilités (PRIM)"
+  - id: vigicrues
+    type: vigicrues_vigilance
+    libelle: "Vigilance crues par tronçon (Vigicrues)"
+    url: "https://www.vigicrues.gouv.fr/services/1/InfoVigiCru.geojson"
+    emprise_wgs84: [1.4, 48.1, 3.6, 49.3]   # tronçons qui recoupent cette emprise (ouest, sud, est, nord)
+    simplification_deg: 0.0005              # tracé simplifié (~50 m) : le fichier national pèse 2 Mo
+    periode_s: 900
+    visible: true
+    attribution: "Vigicrues (SCHAPI)"
 
 # Contexte d'une maquette (lot 5, croisements) : risques (Géorisques), bâti environnant (BDNB), niveau du cours
 # d'eau le plus proche (Hub'Eau), interrogés par le serveur à la demande (bouton de la fiche), gardés en cache.
@@ -159,6 +169,12 @@ contexte:
   rayon_station_km: 5                # station hydrométrique la plus proche dans ce rayon
   vigicrues: "https://www.vigicrues.gouv.fr/services/station.json/index.php"   # crues historiques des stations de prévision
   max_stations_vigicrues: 4          # stations voisines interrogées au plus pour trouver des crues historiques
+  vigicrues_observations: "https://www.vigicrues.gouv.fr/services/observations.json/index.php"   # hauteurs observées (~3 mois)
+  vigicrues_previsions: "https://www.vigicrues.gouv.fr/services/previsions.json/index.php"       # publiées en période de crue
+  jours_hydrogramme: 30              # durée de la courbe de hauteur d'eau de la fiche
+  periode_hydrogramme_s: 600         # courbe gardée en mémoire (secondes)
+  source_vigilance: "vigicrues"       # id de la source temps réel de vigilance crues (section temps_reel)
+  rayon_vigilance_km: 5              # tronçon en vigilance le plus proche de l'ouvrage, dans ce rayon
   delai_etages_s: 300                # lecture des étages IFC d'une maquette traitée avant leur extraction (une fois, mise en cache)
 
 donnees:

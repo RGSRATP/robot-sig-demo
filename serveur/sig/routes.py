@@ -429,6 +429,29 @@ def maquette_contexte(id_maquette: str, actualiser: bool = False,
     return {**{k: v for k, v in d.items() if not k.startswith("_")}, "face_a_l_eau": eau}
 
 
+@routeur.get("/maquettes/{id_maquette}/hydrogramme")
+def maquette_hydrogramme(id_maquette: str, cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    """Niveau du cours d'eau (m NGF) sur les derniers jours et prévisions Vigicrues, crues historiques, niveaux de la
+    maquette, vigilance du tronçon le plus proche : données de la courbe de la fiche."""
+    if not cfg.get("contexte"):
+        raise HTTPException(status_code=404, detail="section « contexte » absente de config/sig.yaml")
+    m = _maquette_decrite(id_maquette, cfg, cfgm)
+    pos = m.get("positionnement") or {}
+    if pos.get("statut") != "positionnee":
+        raise HTTPException(status_code=422, detail=f"{m['nom']} : maquette non positionnée")
+    cx = cfg["contexte"]
+    d = ctx_sig.contexte(cfg, m)
+    niveaux = maq_sig.niveaux_ngf(cfgm, m, delai_s=float(cx.get("delai_etages_s", 300)))
+    h = ctx_sig.hydrogramme(cfg, d["crue"], niveaux)
+    h["vigilance"] = None
+    if cx.get("source_vigilance") and tr_sig.source(cfg, cx["source_vigilance"]):
+        v = tr_sig.donnees(cfg, cx["source_vigilance"])
+        h["vigilance"] = ctx_sig.vigilance_proche(v["features"], *pos["centre_wgs84"], cx.get("rayon_vigilance_km", 5))
+        if v.get("erreur"):
+            h["erreurs"].append(f"vigilance crues : {v['erreur']}")
+    return {**h, "maquette": {"id": m["id"], "nom": m["nom"]}}
+
+
 @routeur.get("/maquettes/{id_maquette}/calage")
 def maquette_calage(id_maquette: str, cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
     """Contrôle du calage vertical : terrain RGE ALTI (calage) comparé au MNT LiDAR HD sur l'emprise, niveau de la

@@ -156,7 +156,7 @@ def test_service_injoignable_ne_bloque_pas(cfg):
 def test_sources_publiques_sans_cle(cfg, monkeypatch):
     monkeypatch.setattr(tr.reseau, "lire_env", lambda nom: CLE)
     s = {x["id"]: x for x in tr.sources_publiques(cfg)}
-    assert set(s) == {"velib", "hubeau", "meteo", "idfm"}
+    assert set(s) == {"velib", "hubeau", "meteo", "idfm", "vigicrues"}
     assert s["idfm"]["cle"] == {"variable": "IDFM_PRIM_CLE", "presente": True}
     assert CLE not in str(s)
 
@@ -204,3 +204,21 @@ def test_source_reelle(cfg, id_):
     """Vrais services, à travers le proxy : pytest -m reseau"""
     d = tr.donnees(cfg, id_)
     assert d["erreur"] is None and len(d["features"]) > 10
+
+
+def test_vigilance_crues_par_troncon_dans_l_emprise():
+    from serveur.sig import temps_reel as tr
+    geo = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[2.3, 48.8], [2.4, 48.85]]},
+         "properties": {"lbentcru": "Seine parisienne", "CdEntCru": "SE1", "NivInfViCr": 3}},
+        {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[9.0, 42.0], [9.1, 42.1]]},
+         "properties": {"lbentcru": "Golo", "CdEntCru": "CO1", "NivInfViCr": 1}},
+        {"type": "Feature", "geometry": None, "properties": {"lbentcru": "Cassé"}}]}
+    cfg = {"temps_reel": [{"id": "v", "type": "vigicrues_vigilance", "url": "https://vigi.test/x.geojson",
+                           "emprise_wgs84": [1.4, 48.1, 3.6, 49.3], "periode_s": 900}]}
+    fab = lambda c: httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=geo)))
+    tr.reinitialiser()
+    d = tr.donnees(cfg, "v", fabrique=fab)
+    assert [f["properties"]["troncon"] for f in d["features"]] == ["Seine parisienne"]
+    assert d["features"][0]["properties"]["vigilance"] == "Orange" and d["erreur"] is None
+    assert any("Cassé" in a for a in d["avertissements"])

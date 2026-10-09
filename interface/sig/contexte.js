@@ -10,6 +10,7 @@ const SOURCE_CALAGE = 'sig-contexte-calage';
 const COULEURS_NIVEAU = { 'élevé': '#e03131', moyen: '#f08c00', 'à vérifier': '#f08c00', faible: '#2f9e44', info: '#868e96' };
 const COULEURS_POINTS = { 'Installation classée': '#7048e8', 'Site potentiellement pollué': '#a61e4d',
   'Cavité souterraine': '#495057', 'Mouvement de terrain': '#e8590c' };
+const COULEURS_VIGILANCE = { 1: '#2f9e44', 2: '#fcc419', 3: '#f76707', 4: '#e03131' };   // Vigicrues
 const nf = (v, d = 2) => Number(v).toLocaleString('fr-FR', { maximumFractionDigits: d });
 
 function installer(carte, police) {
@@ -48,6 +49,7 @@ export function sectionContexte(m, { carte, police }) {
       const d = await lire(`maquettes/${m.id}/contexte`, actualiser ? { actualiser: 'true' } : {});
       installer(carte, police);
       rendre(d);
+      zone.append(sectionCourbe(m.id));
     } catch (e) {
       zone.replaceChildren(el('p', { className: 'sig-erreur', textContent: e.message }));
     }
@@ -146,6 +148,141 @@ function niveauxFaceALEau(eau, c, id) {
       + 'l’étanchéité ne sont pas pris en compte ; les crues anciennes sont converties avec le zéro d’échelle actuel.' }),
   );
   return sortie;
+}
+
+// ---------------------------------------------------------------- courbe du niveau de l'eau
+
+const SVG = 'http://www.w3.org/2000/svg';
+function svg(nom, attrs = {}, ...enfants) {
+  const n = document.createElementNS(SVG, nom);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  n.append(...enfants);
+  return n;
+}
+const dateFr = (t) => new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+const heureFr = (t) => new Date(t).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+/** Pas « rond » pour environ n graduations sur [a, b]. */
+function pasRond(a, b, n) {
+  const brut = Math.max((b - a) / n, 0.01);
+  const p = 10 ** Math.floor(Math.log10(brut));
+  return [1, 2, 2.5, 5, 10].map((k) => k * p).find((x) => x >= brut);
+}
+
+/** Étiquettes écartées d'au moins « ecart » pixels, du bas vers le haut. */
+function ecarter(etiquettes, ecart) {
+  const tri = [...etiquettes].sort((a, b) => b.y - a.y);
+  for (let i = 1; i < tri.length; i += 1) tri[i].y = Math.min(tri[i].y, tri[i - 1].y - ecart);
+  return tri;
+}
+
+/** Section « Niveau de l'eau » : courbe des derniers jours, prévisions, crues historiques, niveaux de l'ouvrage. */
+function sectionCourbe(id) {
+  const zone = el('div', { className: 'sig-courbe-eau' }, el('p', { className: 'sig-info', textContent: 'Courbe du niveau de l’eau…' }));
+  lire(`maquettes/${id}/hydrogramme`).then((h) => zone.replaceChildren(...courbe(h)))
+    .catch((e) => zone.replaceChildren(el('p', { className: 'sig-erreur', textContent: `Courbe du niveau de l’eau : ${e.message}` })));
+  return zone;
+}
+
+export function courbe(h) {   // exportée pour l’aperçu et les essais
+  const titre = el('h4', { textContent: `Niveau de l’eau — ${h.cours_d_eau || h.station || 'station'}` });
+  const v = h.vigilance;
+  const vig = v ? el('p', {}, el('span', { className: 'sig-niveau-risque', style: `background:${COULEURS_VIGILANCE[v.niveau] || '#868e96'}`,
+    textContent: `vigilance ${String(v.vigilance).toLowerCase()}` }), ` Tronçon Vigicrues « ${v.troncon} », à ${nf(v.distance_km)} km.`) : null;
+  const erreurs = (h.erreurs || []).map((e) => el('p', { className: 'sig-alerte', textContent: e }));
+  if (!h.observations?.length) {
+    return [titre, vig, el('p', { className: 'sig-info', textContent: 'Aucune hauteur d’eau observée récemment à la station.' }), ...erreurs].filter(Boolean);
+  }
+  const obs = h.observations.map(([t, z]) => [Date.parse(t), z]);
+  const prev = (h.previsions || []).map(([t, z, lo, hi]) => [Date.parse(t), z, lo ?? z, hi ?? z]);
+  const crues = h.crues || [];
+  // niveaux de l'ouvrage : les plus bas (au plus 3) pour garder l'eau lisible ; les autres sont annoncés
+  const niveaux = [...(h.niveaux || [])].sort((a, b) => a.altitude_ngf - b.altitude_ngf).slice(0, 3);
+  const valeurs = [...obs.map((o) => o[1]), ...prev.flatMap((p) => [p[2], p[3]]), ...crues.map((c) => c.niveau_ngf),
+    ...niveaux.map((n) => n.altitude_ngf)];
+  const pas = pasRond(Math.min(...valeurs), Math.max(...valeurs), 5);
+  const y0 = Math.floor((Math.min(...valeurs) - pas / 2) / pas) * pas;
+  const y1 = Math.ceil((Math.max(...valeurs) + pas / 2) / pas) * pas;
+  const t0 = obs[0][0];
+  const t1 = Math.max(obs[obs.length - 1][0], ...prev.map((p) => p[0]));
+  const L = 460; const H = 250; const m = { g: 40, d: 118, h: 22, b: 24 };
+  const X = (t) => m.g + ((t - t0) / (t1 - t0 || 1)) * (L - m.g - m.d);
+  const Y = (z) => m.h + ((y1 - z) / (y1 - y0)) * (H - m.h - m.b);
+  const racine = svg('svg', { viewBox: `0 0 ${L} ${H}`, class: 'sig-courbe-eau__svg', role: 'img',
+    'aria-label': `Niveau de ${h.cours_d_eau || 'l’eau'} en mètres NGF sur ${h.jours} jours, crues historiques et niveaux de l’ouvrage` });
+  for (let z = y0; z <= y1 + 1e-9; z += pas) {   // grille et axe des altitudes
+    racine.append(svg('line', { x1: m.g, x2: L - m.d, y1: Y(z), y2: Y(z), class: 'grille' }),
+      svg('text', { x: m.g - 6, y: Y(z) + 4, 'text-anchor': 'end', class: 'axe' }, nf(z, 1)));
+  }
+  racine.append(svg('text', { x: 4, y: 11, class: 'axe' }, 'm NGF'));
+  const jour = 86400000;   // axe du temps : une graduation par semaine (par jour si la période est courte)
+  const pasT = (t1 - t0) > 10 * jour ? 7 * jour : jour;
+  for (let t = Math.ceil(t0 / jour) * jour; t <= t1; t += pasT) {
+    racine.append(svg('text', { x: X(t), y: H - 8, 'text-anchor': 'middle', class: 'axe' }, dateFr(t)));
+  }
+  const etiquettes = [];   // crues (tirets gris) et niveaux de l'ouvrage (orange), étiquetés à droite
+  for (const c of crues) {
+    racine.append(svg('line', { x1: m.g, x2: L - m.d, y1: Y(c.niveau_ngf), y2: Y(c.niveau_ngf), class: 'crue' }));
+    etiquettes.push({ y: Y(c.niveau_ngf), texte: `Crue ${(c.libelle.match(/(\d{4})\s*$/) || [null, c.libelle])[1]} · ${nf(c.niveau_ngf)}`, classe: 'etiq-crue' });
+  }
+  for (const n of niveaux) {
+    racine.append(svg('line', { x1: m.g, x2: L - m.d, y1: Y(n.altitude_ngf), y2: Y(n.altitude_ngf), class: 'niveau' }));
+    etiquettes.push({ y: Y(n.altitude_ngf), texte: `${n.nom.replace(/ de la maquette$/, '')} · ${nf(n.altitude_ngf)}`, classe: 'etiq-niveau' });
+  }
+  for (const e of ecarter(etiquettes, 12)) {
+    racine.append(svg('text', { x: L - m.d + 6, y: e.y + 4, class: e.classe }, e.texte.length > 22 ? `${e.texte.slice(0, 21)}…` : e.texte));
+  }
+  if (prev.length) {   // prévisions : fourchette et trait tireté
+    const p0 = obs[obs.length - 1];
+    const bande = [...prev.map((p) => `${X(p[0])},${Y(p[3])}`), ...[...prev].reverse().map((p) => `${X(p[0])},${Y(p[2])}`)].join(' ');
+    racine.append(svg('polygon', { points: bande, class: 'prevision-bande' }),
+      svg('polyline', { points: [p0, ...prev].map((p) => `${X(p[0])},${Y(p[1])}`).join(' '), class: 'prevision' }));
+  }
+  racine.append(svg('polyline', { points: obs.map((o) => `${X(o[0])},${Y(o[1])}`).join(' '), class: 'observe' }));
+  const der = obs[obs.length - 1];
+  racine.append(svg('circle', { cx: X(der[0]), cy: Y(der[1]), r: 4, class: 'point-actuel' }));
+  // survol : réticule et bulle (date, niveau, marge au niveau le plus bas de l'ouvrage)
+  const reticule = svg('line', { y1: m.h, y2: H - m.b, class: 'reticule', visibility: 'hidden' });
+  const repere = svg('circle', { r: 4, class: 'point-actuel', visibility: 'hidden' });
+  const cible = svg('rect', { x: m.g, y: m.h, width: L - m.g - m.d, height: H - m.h - m.b, fill: 'transparent' });
+  racine.append(reticule, repere, cible);
+  const bulle = el('div', { className: 'sig-courbe-eau__bulle', hidden: true });
+  const serie = [...obs.map((o) => [o[0], o[1], 'observé']), ...prev.map((p) => [p[0], p[1], 'prévu'])];
+  const bas = niveaux[0];
+  cible.addEventListener('pointermove', (ev) => {
+    const r = racine.getBoundingClientRect();
+    const t = t0 + (((ev.clientX - r.left) * (L / r.width) - m.g) / (L - m.g - m.d)) * (t1 - t0);
+    const p = serie.reduce((a, b) => (Math.abs(b[0] - t) < Math.abs(a[0] - t) ? b : a));
+    reticule.setAttribute('x1', X(p[0]));
+    reticule.setAttribute('x2', X(p[0]));
+    repere.setAttribute('cx', X(p[0]));
+    repere.setAttribute('cy', Y(p[1]));
+    reticule.setAttribute('visibility', 'visible');
+    repere.setAttribute('visibility', 'visible');
+    const marge = bas ? bas.altitude_ngf - p[1] : null;
+    bulle.replaceChildren(el('strong', { textContent: `${nf(p[1])} m NGF` }), ` ${p[2]}, ${heureFr(p[0])}`,
+      ...(bas ? [el('div', { textContent: `${bas.nom} : ${marge >= 0 ? `${nf(marge)} m au-dessus` : `${nf(-marge)} m sous l’eau`}` })] : []));
+    bulle.hidden = false;
+    bulle.style.left = `${Math.min((X(p[0]) / L) * r.width + 10, r.width - 200)}px`;
+    bulle.style.top = `${Math.max(0, (Y(p[1]) / H) * r.height - 48)}px`;
+  });
+  cible.addEventListener('pointerleave', () => {
+    bulle.hidden = true;
+    reticule.setAttribute('visibility', 'hidden');
+    repere.setAttribute('visibility', 'hidden');
+  });
+  const traits = [['observe', `observé (${h.source})`], ...(prev.length ? [['prevision', 'prévu (Vigicrues)']] : []),
+    ...(crues.length ? [['crue', 'crues historiques']] : []), ...(niveaux.length ? [['niveau', 'niveaux de l’ouvrage']] : [])];
+  const legende = el('ul', { className: 'sig-legende sig-courbe-eau__legende' }, ...traits.map(([c, t]) => el('li', {},
+    el('span', { className: `sig-courbe-eau__trait sig-courbe-eau__trait--${c}` }), el('span', { textContent: t }))));
+  const masques = (h.niveaux || []).length - niveaux.length;
+  return [titre, vig, legende, el('div', { className: 'sig-courbe-eau__cadre' }, racine, bulle),
+    el('p', { className: 'sig-info', textContent: `Station ${h.station}, zéro d’échelle ${nf(h.zero_echelle_ngf)} m NGF, `
+      + `${h.jours} derniers jours, une valeur par heure. `
+      + (prev.length ? '' : 'Pas de prévision publiée (Vigicrues n’en publie qu’en période de crue). ')
+      + (masques > 0 ? `Seuls les ${niveaux.length} niveaux les plus bas de l’ouvrage sont tracés (${masques} autres plus haut, voir le tableau). ` : '')
+      + 'Le niveau à la station n’est pas celui au droit de l’ouvrage.' }),
+    ...erreurs].filter(Boolean);
 }
 
 /** Section « Contrôle du calage » : terrain RGE ALTI (calage) comparé au MNT LiDAR HD sur l'emprise, constats,

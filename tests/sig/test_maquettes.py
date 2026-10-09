@@ -415,3 +415,22 @@ def test_api_controle_du_calage(client, inv, cfgm, monkeypatch):
     assert d["niveau_proche_terrain"]["nom"] == "N00"   # plancher à 80 m, 19,8 m au-dessus du terrain : à vérifier
     assert d["constats"][-1]["niveau"] == "à vérifier"
     assert client.get(f"/api/sig/maquettes/{inv['sans_georeferencement']['id']}/calage").status_code == 422
+
+
+def test_api_hydrogramme(client, inv, cfg_test, monkeypatch):
+    from serveur.sig import contexte as ctx
+    from serveur.sig import reseau
+    monkeypatch.setitem(cfg_test, "contexte", {"hubeau": "https://hubeau.test", "jours_hydrogramme": 30,
+                                               "vigicrues_observations": "https://vigi.test/observations.json"})
+    monkeypatch.setattr(ctx, "_hydro_cache", {})
+    crue = {"code": "F1", "station": "Station", "zero_echelle_ngf": 70.0, "niveau_ngf": 71.0,
+            "historiques": {"code": "F1", "station": "Station", "cours_d_eau": "Rivière", "zero_echelle_ngf": 70.0,
+                            "crues": [{"libelle": "Crue du 28/01/1910", "niveau_ngf": 81.2}]}}
+    monkeypatch.setattr(ctx, "contexte", lambda cfg, m, actualiser=False: {"crue": crue})
+    from datetime import datetime, timezone
+    maintenant = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    monkeypatch.setattr(reseau, "client", lambda cfg: httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(
+        200, json={"Serie": {"ObssHydro": [{"DtObsHydro": maintenant, "ResObsHydro": 1.5}]}}))))
+    h = client.get(f"/api/sig/maquettes/{inv['methode2a_site_cc49_identifie']['id']}/hydrogramme").json()
+    assert h["source"] == "Vigicrues" and h["observations"][0][1] == pytest.approx(71.5)
+    assert h["crues"][0]["niveau_ngf"] == 81.2 and h["niveaux"][0]["nom"] == "N00" and h["vigilance"] is None
