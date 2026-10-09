@@ -410,3 +410,22 @@ a.sig-bouton { text-decoration: none; display: inline-block; }
 .sig-courbe-eau__trait--prevision { border-top-style: dashed; }
 .sig-courbe-eau__trait--crue { border-top: 1px dashed var(--encre-2); }
 .sig-courbe-eau__trait--niveau { border-top: 2px solid var(--ouvrage); }
+
+/* ---------- vues thématiques (onglets du bandeau, légende sur la carte) ---------- */
+.sig-vues { display: flex; align-items: stretch; gap: 2px; align-self: stretch; margin-left: 8px; flex: 1 1 auto; min-width: 0;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.sig-vues__onglet {
+  border: 0; background: none; padding: 0 12px; cursor: pointer; white-space: nowrap;
+  font: 600 13px/1 var(--sig-police-titre); color: var(--sig-encre-2); border-bottom: 3px solid transparent;
+}
+.sig-vues__onglet:hover { color: var(--sig-bleu); background: var(--sig-bleu-clair); }
+.sig-vues__onglet--active { color: var(--sig-bleu); border-bottom-color: var(--sig-bleu); }
+.sig-entete--vues .sig-entete__sous { display: none; }
+.sig-legende-vue {
+  position: absolute; left: 10px; bottom: 44px; z-index: 2; width: 290px; max-height: calc(100% - 60px); overflow-y: auto;
+  background: var(--sig-fond); border-radius: 6px; box-shadow: var(--sig-ombre); padding: 10px 12px; font-size: 12px;
+}
+.sig-app .sig-legende-vue__titre { margin: 0 0 4px; font: 700 14px/1.3 var(--sig-police-titre); color: var(--sig-bleu); text-transform: none; letter-spacing: 0; }
+.sig-legende-vue .sig-legende { grid-template-columns: 1fr; }
+.sig-app .sig-legende-vue__sous { margin: 8px 0 4px; font-size: 12px; border: 0; padding: 0; }
+.sig-legende-vue__texte { margin: 4px 0; color: var(--sig-encre-2); }

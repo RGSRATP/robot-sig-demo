@@ -347,6 +347,7 @@ export class GestionnaireLidar {
 
   activer(v) {
     this.actif = v;
+    if (this._case) this._case.checked = v;
     if (v) this.avantActivation();
     this.messages.clear();
     this.mettreAJour();
@@ -356,6 +357,7 @@ export class GestionnaireLidar {
   section() {
     const actif = el('input', { type: 'checkbox', checked: this.actif });
     actif.addEventListener('change', () => this.activer(actif.checked));
+    this._case = actif;
     const mode = el('select', {},
       ...[['classe', 'Par classe'], ['altitude', 'Par altitude'], ['rgb', 'Couleurs réelles']]
         .map(([v, t]) => el('option', { value: v, textContent: t, selected: v === this.mode })));

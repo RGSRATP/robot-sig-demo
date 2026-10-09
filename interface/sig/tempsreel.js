@@ -86,6 +86,15 @@ export class GestionnaireTempsReel {
     setInterval(() => { for (const id of this.sources.keys()) this._majEtat(id); }, 30000);   // « il y a … min »
   }
 
+  /** Sources affichées imposées (vues thématiques) ; ids null : réglage « visible » de la configuration. */
+  definirVisibles(ids) {
+    for (const [id, s] of this.sources) {
+      const v = ids == null ? Boolean(s.cfg.visible) : ids.includes(id);
+      if (v !== s.visible) this.basculer(id, v);
+    }
+    this._rendre();
+  }
+
   basculer(id, visible) {
     const s = this.sources.get(id);
     s.visible = visible;

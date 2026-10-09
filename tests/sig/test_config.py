@@ -229,3 +229,26 @@ def test_zoom_et_champ_de_vision_invalides(tmp_path, ligne, attendu):
 def test_nom_de_l_application_transmis_a_l_interface():
     cfg = cfg_sig.charger_config()
     assert cfg_sig.config_carte(cfg)["application"]["nom"] == "Synergie-SIG-BDM-POC"
+
+
+def test_vues_thematiques_valides_et_transmises():
+    vues = cfg_sig.config_carte(cfg_sig.charger_config())["vues"]
+    assert [v["id"] for v in vues] == ["generale", "inondations", "carbone", "ouvrages"]
+
+
+@pytest.mark.parametrize("vue, attendu", [
+    ({"id": "X", "libelle": "x"}, "minuscules"),
+    ({"id": "a", "libelle": "a", "theme": "pluie"}, "theme"),
+    ({"id": "a", "libelle": "a", "theme": "categories"}, "categories"),
+    ({"id": "a", "libelle": "a", "relief": "oui"}, "relief"),
+    ({"id": "a", "libelle": "a", "couches": "Gares"}, "couches"),
+    ({"id": "a", "libelle": "a", "camera": {"zoom": 10}}, "camera"),
+])
+def test_vues_invalides(tmp_path, vue, attendu):
+    import yaml
+    c = yaml.safe_load(cfg_sig.CHEMIN_CONFIG.read_text(encoding="utf-8"))
+    c["vues"] = [vue]
+    p = tmp_path / "sig.yaml"
+    p.write_text(yaml.safe_dump(c, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(cfg_sig.ConfigInvalide, match=attendu):
+        cfg_sig.charger_config(p)

@@ -70,6 +70,12 @@ export class GestionnaireMaquettes {
         layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 12, 'text-font': [police], 'text-allow-overlap': true },
         paint: { 'text-color': '#fff' } });
     }
+    // vues thématiques : chaque maquette en point coloré, sans regroupement (un groupe cacherait les valeurs)
+    this.carte.addSource('sig-maquettes-theme', { type: 'geojson', data: vide });
+    this.carte.addLayer({ id: 'sig-maquettes-theme-point', type: 'circle', source: 'sig-maquettes-theme', layout: { visibility: 'none',
+      'circle-sort-key': ['to-number', ['get', 'v'], 0] },
+    paint: { 'circle-color': COULEUR_EMPRISE, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 4.5, 13, 8],
+      'circle-stroke-color': '#fff', 'circle-stroke-width': 1.2 } });
     this.carte.addSource('sig-maquettes', { type: 'geojson', data: vide, promoteId: 'id' });
     this.carte.addLayer({ id: 'sig-maquettes-fond', type: 'fill', source: 'sig-maquettes',
       paint: { 'fill-color': COULEUR_EMPRISE, 'fill-opacity': ['case', ['boolean', ['feature-state', 'charge'], false], 0.04, 0.18] } });
@@ -243,10 +249,10 @@ export class GestionnaireMaquettes {
     const features = [];
     for (const m of this.maquettes.values()) {
       const pos = m.positionnement;
-      if (pos?.statut !== 'positionnee') continue;
-      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: pos.centre_wgs84 }, properties: { id: m.id } });
+      if (pos?.statut !== 'positionnee' || (this.theme && !this.theme.garder(m))) continue;
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: pos.centre_wgs84 }, properties: this._proprietesTheme(m) });
     }
-    this.carte.getSource('sig-maquettes-points').setData({ type: 'FeatureCollection', features });
+    this.carte.getSource(this.theme ? 'sig-maquettes-theme' : 'sig-maquettes-points').setData({ type: 'FeatureCollection', features });
   }
 
   /** Vue éloignée : points regroupés ; vue rapprochée : emprises de la zone affichée, demandées au serveur. */
@@ -254,7 +260,10 @@ export class GestionnaireMaquettes {
     const seuil = this.inventaire?.zoom_emprises ?? 13;
     const proche = this.carte.getZoom() >= seuil;
     for (const c of ['sig-maquettes-groupes', 'sig-maquettes-point', 'sig-maquettes-groupes-nb']) {
-      if (this.carte.getLayer(c)) this.carte.setLayoutProperty(c, 'visibility', proche ? 'none' : 'visible');
+      if (this.carte.getLayer(c)) this.carte.setLayoutProperty(c, 'visibility', proche || this.theme ? 'none' : 'visible');
+    }
+    if (this.carte.getLayer('sig-maquettes-theme-point')) {
+      this.carte.setLayoutProperty('sig-maquettes-theme-point', 'visibility', !proche && this.theme ? 'visible' : 'none');
     }
     if (!proche) return;
     const b = this.carte.getBounds();
@@ -274,13 +283,39 @@ export class GestionnaireMaquettes {
     }
     if (requete !== this._requeteEmprises) return;   // déplacement entre-temps : réponse périmée
     this._zone = zone;
-    for (const f of r.features) f.properties.nom = this.maquettes.get(f.properties.id)?.nomCourt || '';
+    if (this.theme) r.features = r.features.filter((f) => { const m = this.maquettes.get(f.properties.id); return m && this.theme.garder(m); });
+    for (const f of r.features) {
+      const m = this.maquettes.get(f.properties.id);
+      Object.assign(f.properties, m ? this._proprietesTheme(m) : {});
+      f.properties.nom = m?.nomCourt || '';
+    }
     this.carte.getSource('sig-maquettes').setData(r);
     this.emprisesZone = r;
     for (const id of this.affichees) {
       this.carte.setFeatureState({ source: 'sig-maquettes', id }, { charge: this.c3d.estCharge(id) });
     }
     if (this.ficheOuverte) this.carte.setFeatureState({ source: 'sig-maquettes', id: this.ficheOuverte }, { choisie: true });
+  }
+
+  /** Thème des maquettes (vues thématiques, vues.js) : { garder(m), valeur(m) → nombre, texte ou null,
+   *  couleur : expression MapLibre sur la propriété « v » } ; null : aspect d'origine. */
+  definirTheme(theme) {
+    this.theme = theme;
+    const couleur = theme?.couleur ?? COULEUR_EMPRISE;
+    const c = this.carte;
+    if (!c.getLayer('sig-maquettes-point')) return;
+    c.setPaintProperty('sig-maquettes-theme-point', 'circle-color', couleur);
+    c.setPaintProperty('sig-maquettes-fond', 'fill-color', couleur);
+    c.setPaintProperty('sig-maquettes-fond', 'fill-opacity',
+      ['case', ['boolean', ['feature-state', 'charge'], false], 0.04, theme ? 0.55 : 0.18]);
+    c.setPaintProperty('sig-maquettes-contour', 'line-color', couleur);
+    this._majPoints();
+    this._majVue(true);
+  }
+
+  _proprietesTheme(m) {
+    const v = this.theme?.valeur(m);
+    return v == null ? { id: m.id } : { id: m.id, v };
   }
 
   /** Regroupe les redessins de la liste demandés pendant la même image. */
@@ -381,7 +416,7 @@ export class GestionnaireMaquettes {
 
   /** Emprise de maquette sous le point écran (id) ou null. */
   empriseSous(point) {
-    const couches = ['sig-maquettes-fond', 'sig-maquettes-point'].filter((c) => this.carte.getLayer(c));
+    const couches = ['sig-maquettes-fond', 'sig-maquettes-point', 'sig-maquettes-theme-point'].filter((c) => this.carte.getLayer(c));
     const f = this.carte.queryRenderedFeatures([[point.x - 3, point.y - 3], [point.x + 3, point.y + 3]], { layers: couches })[0];
     return f ? f.properties.id : null;
   }

@@ -121,6 +121,14 @@ export class GestionnaireBatiments {
     this._majMasques();
   }
 
+  /** Affichage imposé (vues thématiques) : la case du volet suit. */
+  definirVisible(v) {
+    this.visible = Boolean(v);
+    this.appliquer();
+    const i = this._case?.querySelector('input');
+    if (i) i.checked = this.visible;
+  }
+
   appliquer() {
     this.carte.setLayoutProperty(COUCHE_BATIMENTS, 'visibility', this.visible ? 'visible' : 'none');
     if (!this.visible) this.selectionner(null);
@@ -149,7 +157,7 @@ export class GestionnaireBatiments {
         el('span', { textContent: 'Autre / indifférencié' })));
     return el('section', { className: 'sig-section' }, el('h3', { textContent: 'Bâtiments 3D' }),
       el('div', { className: 'sig-options sig-options--colonne' },
-        coche(`Afficher les bâtiments (à partir du zoom ${c.zoom_min})`, this.visible, (v) => { this.visible = v; this.appliquer(); }),
+        (this._case = coche(`Afficher les bâtiments (à partir du zoom ${c.zoom_min})`, this.visible, (v) => { this.visible = v; this.appliquer(); })),
         coche('Masquer les bâtiments sous les maquettes 3D', this.masquer, (v) => { this.masquer = v; this._majMasques(); })),
       el('div', { className: 'sig-reglage' }, el('span', { className: 'sig-reglage__libelle', textContent: 'Opacité' }), opacite, valO),
       legende,

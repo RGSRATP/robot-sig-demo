@@ -118,6 +118,13 @@ export class GestionnaireRelief {
     return new Set(this.cfg.sources.flatMap((s) => [idsRelief(s.id).terrain, idsRelief(s.id).ombrage]));
   }
 
+  /** Affichage imposé (vues thématiques) : la case du volet suit. */
+  definirActif(v) {
+    this.actif = Boolean(v);
+    this.appliquer();
+    this.majCase?.();
+  }
+
   appliquer() {
     const c = this.carte;
     c.setTerrain(this.actif ? { source: idsRelief(this.source).terrain, exaggeration: 1 } : null);

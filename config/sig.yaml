@@ -5,6 +5,57 @@ application:
   nom: "Synergie-SIG-BDM-POC"
   sous_titre: "Carte, couches SIG et maquettes BIM"
 
+# Vues thématiques (onglets du bandeau, adresse directe : …/#vue=<id>). Chaque clé est facultative ; absente, le
+# réglage courant est gardé. couches : motifs du libellé ou du fichier des couches SIG à afficher (les autres sont
+# masquées ; [] : aucune ; « toutes » : réglages d'origine) ; temps_reel : ids des sources (même logique) ;
+# relief, batiments, lidar : vrai / faux ; camera : centre_wgs84, zoom, inclinaison, orientation, ou « maquettes »
+# (cadrage sur les maquettes de la vue) ;
+# theme : couleur des maquettes — point_bas (altitude NGF du point bas), carbone (t CO2e), categories (selon
+# « categories » : libellé, motifs du chemin de la maquette dans le dossier IFC, couleur facultative ; les autres sont masquées).
+vues:
+  - id: generale
+    libelle: "Vue générale"
+    description: "Toutes les données, réglages d'origine"
+    couches: toutes
+    temps_reel: toutes
+    relief: false
+    batiments: true
+    lidar: false
+  - id: inondations
+    libelle: "Inondations"
+    description: "Vigilance crues par tronçon, hauteurs des cours d'eau, altitude du point bas des ouvrages. Fiche d'un ouvrage, « Contexte » : courbe du niveau de l'eau, crues historiques et niveaux."
+    couches: []
+    temps_reel: [vigicrues, hubeau]
+    relief: false
+    batiments: false
+    lidar: false
+    theme: point_bas
+    camera: maquettes
+  - id: carbone
+    libelle: "Carbone"
+    description: "Ordre de grandeur des émissions de production des matériaux de chaque maquette (facteurs génériques indicatifs). Fiche d'une maquette : détail par matériau."
+    couches: []
+    temps_reel: []
+    relief: false
+    batiments: false
+    lidar: false
+    theme: carbone
+    camera: maquettes
+  - id: ouvrages
+    libelle: "Ouvrages d'art"
+    description: "Maquettes des gares, des tunnels (intergares) et des ouvrages annexes, sur le tracé des lignes du Grand Paris Express."
+    couches: ["Lignes du GPE"]               # les points des gares et ouvrages SIG doubleraient ceux des maquettes
+    temps_reel: []
+    relief: false
+    batiments: true
+    lidar: false
+    theme: categories
+    categories:
+      - { libelle: "Gares", motifs: ["*/gare/*"], couleur: "#0A0082" }                      # bleu RATP
+      - { libelle: "Tunnels (intergares)", motifs: ["*/intergare/*"], couleur: "#EB6834" }
+      - { libelle: "Ouvrages annexes", motifs: ["*/ouvrage annexe/*"], couleur: "#00AA91" }   # vert d'eau RATP
+    camera: maquettes
+
 carte:
   centre_wgs84: [2.35, 48.85]   # Île-de-France
   zoom_initial: 10

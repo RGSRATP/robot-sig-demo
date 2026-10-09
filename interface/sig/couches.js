@@ -221,6 +221,21 @@ export class GestionnaireCouches {
   }
 
   /** Identifiants des couches affichées (pour l'interrogation croisée). */
+  /** Couches visibles imposées (vues thématiques) : celles dont le libellé ou le fichier contient l'un des motifs
+   *  (insensible à la casse) ; motifs null : visibilité d'origine de l'inventaire. */
+  definirVisibles(motifs) {
+    const norm = (t) => (t || '').toLocaleLowerCase('fr');
+    for (const [id, etat] of this.etats) {
+      const c = etat.couche;
+      const v = motifs == null ? c.visible : motifs.some((m) => norm(c.libelle).includes(norm(m)) || norm(c.fichier).includes(norm(m)));
+      if (v === etat.visible) continue;
+      etat.visible = v;
+      this._appliquerVisibilite(id);
+      if (v) this._charger(id);
+    }
+    this._rendre();
+  }
+
   visibles() {
     return this.ordre.filter((id) => this.etats.get(id).visible);
   }

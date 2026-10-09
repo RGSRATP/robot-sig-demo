@@ -8,6 +8,7 @@ import { lire } from './api.js';
 import { GestionnaireCouches } from './couches.js';
 import { sectionMaquette, sectionObjet } from './croisement.js';
 import { sectionCalage, sectionCarbone, sectionContexte } from './contexte.js';
+import { GestionnaireVues } from './vues.js';
 import { afficherBatiment, afficherTempsReel, fermerFiche, monterFiche } from './fiche.js';
 import { versLambert93 } from './lambert93.js';
 import { GestionnaireLocaux } from './locaux.js';
@@ -448,6 +449,8 @@ export async function monterCarte(conteneur) {
     await tempsReel.demarrer();
     mesure.installer();
     coupe.installer(cfg.police);
+    // Vues thématiques : onglets du bandeau, une fois couches, maquettes et temps réel prêts
+    new GestionnaireVues(cfg.vues || [], { carte, coque, gauche: g, couches, tempsReel, relief, batiments, lidar, maquettes }).installer();
   };
   if (carte.loaded()) demarrer();
   else carte.once('load', demarrer);

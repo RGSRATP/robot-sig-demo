@@ -80,6 +80,8 @@ def _controler(cfg: dict, chemin: Path) -> dict:
             raise erreur("section « contexte » : « vigicrues » doit être une URL, « max_stations_vigicrues » et "
                          "« delai_etages_s » des nombres > 0 (clés facultatives)")
 
+    _controler_vues(cfg.get("vues"), erreur)
+
     if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
         raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")
 
@@ -250,6 +252,40 @@ CLES_TEMPS_REEL = {
 }
 
 
+THEMES_VUES = ("point_bas", "carbone", "categories")
+
+
+def _controler_vues(vues, erreur) -> None:
+    """Section « vues » (facultative) : vues thématiques de l'interface."""
+    if vues is None:
+        return
+    if not isinstance(vues, list):
+        raise erreur("« vues » doit être une liste")
+    ids = set()
+    for i, v in enumerate(vues, 1):
+        if not isinstance(v, dict) or not isinstance(v.get("id"), str) or not re.fullmatch(r"[a-z0-9_-]+", v["id"])                 or not isinstance(v.get("libelle"), str):
+            raise erreur(f"« vues » n° {i} : « id » (minuscules, chiffres, - ou _) et « libelle » attendus")
+        nom = f"« vues » {v['id']}"
+        if v["id"] in ids:
+            raise erreur(f"{nom} : identifiant en double")
+        ids.add(v["id"])
+        for cle in ("couches", "temps_reel"):
+            if cle in v and v[cle] != "toutes" and not (isinstance(v[cle], list) and all(isinstance(x, str) for x in v[cle])):
+                raise erreur(f"{nom} : « {cle} » doit être une liste de textes ou « toutes »")
+        for cle in ("relief", "batiments", "lidar"):
+            if cle in v and not isinstance(v[cle], bool):
+                raise erreur(f"{nom} : « {cle} » doit valoir true ou false")
+        if v.get("theme") is not None and v["theme"] not in THEMES_VUES:
+            raise erreur(f"{nom} : « theme » doit être l'un de : {', '.join(THEMES_VUES)}")
+        if v.get("theme") == "categories" and not (isinstance(v.get("categories"), list) and v["categories"] and all(
+                isinstance(c, dict) and isinstance(c.get("libelle"), str) and isinstance(c.get("motifs"), list) for c in v["categories"])):
+            raise erreur(f"{nom} : « categories » attendu (liste de {{libelle, motifs}})")
+        cam = v.get("camera")
+        if cam is not None and cam != "maquettes" and not (isinstance(cam, dict) and isinstance(cam.get("centre_wgs84"), list)
+                                                            and _nombre(cam.get("zoom"))):
+            raise erreur(f"{nom} : « camera » attendu avec centre_wgs84 et zoom, ou « maquettes »")
+
+
 def _controler_temps_reel(sources, erreur) -> None:
     """Section « temps_reel » (facultative) : sources interrogées par le serveur."""
     if not isinstance(sources, list):
@@ -382,6 +418,7 @@ def config_carte(cfg: dict) -> dict:
     fonds = cfg["fonds_ign"]
     return {
         "application": cfg.get("application") or {},
+        "vues": cfg.get("vues") or [],
         "centre_wgs84": cfg["carte"]["centre_wgs84"],
         "zoom_initial": cfg["carte"]["zoom_initial"],
         "zoom_max": cfg["carte"].get("zoom_max", 22),

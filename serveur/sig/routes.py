@@ -22,6 +22,7 @@ from . import inventaire as inv_sig
 from . import maquettes as maq_sig
 from . import objets as obj_sig
 from . import temps_reel as tr_sig
+from . import themes as th_sig
 from commun.ifc import proprietes as proprietes_ifc
 
 VERSION = "0.4.0 (lot 3)"
@@ -427,6 +428,15 @@ def maquette_contexte(id_maquette: str, actualiser: bool = False,
         colonnes, lignes = ctx_sig.tableau_niveaux(eau)
         return _csv(cfg, colonnes, lignes, f"niveaux_eau_{m['nom']}")
     return {**{k: v for k, v in d.items() if not k.startswith("_")}, "face_a_l_eau": eau}
+
+
+@routeur.get("/themes/carbone")
+def theme_carbone(cfgm: dict = Depends(_config_maquettes)):
+    """Carbone (t CO2e) de toutes les maquettes traitées, pour la vue « Carbone » ; calcul en arrière-plan, l'interface
+    redemande tant que « complet » est faux."""
+    if not cfgm.get("carbone"):
+        raise HTTPException(status_code=404, detail="section « carbone » absente de config/georef_maquettes.yaml")
+    return th_sig.carbone(cfgm)
 
 
 @routeur.get("/maquettes/{id_maquette}/hydrogramme")
