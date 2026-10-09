@@ -55,6 +55,13 @@ altimetrie:
   url: "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json"
   ressource: "ign_rge_alti_wld"
   ecart_max_terrain_m: 80          # au-delà, l'altitude de la maquette est jugée incohérente avec le terrain
+  # Contrôle du calage (lot 5, croisement 6) : terrain RGE ALTI (celui du calage) comparé au MNT LiDAR HD sur l'emprise.
+  controle:
+    ressource_comparaison: "ign_lidar_hd_mnt_mono_wld"   # MNT LiDAR HD « avec interpolation » (la version sans répond en erreur, constaté le 2026-10-09)
+    libelle_comparaison: "MNT LiDAR HD"
+    points_max: 60                 # points de l'emprise interrogés (sommets, centre, grille régulière)
+    ecart_tolere_m: 0.5            # au centre, écart RGE ALTI / LiDAR au-delà duquel le calage est « à vérifier »
+    amplitude_signalee_m: 2        # terrain plus variable que cela sur l'emprise : calage sur un seul point approximatif
 
 # Déclarations explicites du système des coordonnées projetées du site, par dossier (motif relatif à dossier_ifc).
 # Une déclaration ne remplace pas un système identifié dans la maquette ; elle sert quand RefLatitude/RefLongitude

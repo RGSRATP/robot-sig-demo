@@ -112,6 +112,11 @@ def charger_config(chemin: Path = CHEMIN_GEOREF) -> dict:
     alti = cfg.get("altimetrie")
     if alti is not None and (not isinstance(alti.get("url"), str) or not _nombre(alti.get("ecart_max_terrain_m"), True)):
         raise erreur("section « altimetrie » incomplète (url, ressource, ecart_max_terrain_m)")
+    ctl = (alti or {}).get("controle")
+    if ctl is not None and (not isinstance(ctl, dict) or not isinstance(ctl.get("ressource_comparaison"), str)
+                            or not all(_nombre(ctl.get(k), True) for k in ("points_max", "ecart_tolere_m", "amplitude_signalee_m"))):
+        raise erreur("section « altimetrie.controle » incomplète (ressource_comparaison ; points_max, ecart_tolere_m, "
+                     "amplitude_signalee_m : nombres > 0)")
     for cle in ("systemes_declares", "maquettes"):
         if cfg.get(cle) is None:
             cfg[cle] = []

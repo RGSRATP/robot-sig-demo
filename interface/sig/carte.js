@@ -7,7 +7,7 @@ import './carte.css';
 import { lire } from './api.js';
 import { GestionnaireCouches } from './couches.js';
 import { sectionMaquette, sectionObjet } from './croisement.js';
-import { sectionCarbone, sectionContexte } from './contexte.js';
+import { sectionCalage, sectionCarbone, sectionContexte } from './contexte.js';
 import { afficherBatiment, afficherTempsReel, fermerFiche, monterFiche } from './fiche.js';
 import { versLambert93 } from './lambert93.js';
 import { GestionnaireLocaux } from './locaux.js';
@@ -326,7 +326,7 @@ export async function monterCarte(conteneur) {
     panneau: pMaquettes,
     anomalies: anomaliesMaquettes,
     complementsFiche: (m) => [...sectionMaquette(m, { couches, ouvrirObjetSig: (id, n) => couches.ouvrirObjet(id, n, true) }),
-      ...sectionContexte(m, { carte, police: cfg.police }), ...sectionCarbone(m)],
+      ...sectionContexte(m, { carte, police: cfg.police }), ...sectionCalage(m, { carte, police: cfg.police }), ...sectionCarbone(m)],
     planLocaux: (m) => locaux.ouvrir(m),
     surSelection: () => couches.deselectionner(false),
     surEtat: ({ total, enCours, courant }) => {

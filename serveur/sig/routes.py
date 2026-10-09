@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, Response
 
 from . import config as cfg_sig
 from . import carbone as carb_sig
+from . import calage as cal_sig
 from . import contexte as ctx_sig
 from . import croisement as crois_sig
 from . import esri as esri_sig
@@ -426,6 +427,18 @@ def maquette_contexte(id_maquette: str, actualiser: bool = False,
         colonnes, lignes = ctx_sig.tableau_niveaux(eau)
         return _csv(cfg, colonnes, lignes, f"niveaux_eau_{m['nom']}")
     return {**{k: v for k, v in d.items() if not k.startswith("_")}, "face_a_l_eau": eau}
+
+
+@routeur.get("/maquettes/{id_maquette}/calage")
+def maquette_calage(id_maquette: str, cfg: dict = Depends(_config_valide), cfgm: dict = Depends(_config_maquettes)):
+    """Contrôle du calage vertical : terrain RGE ALTI (calage) comparé au MNT LiDAR HD sur l'emprise, niveau de la
+    maquette le plus proche du terrain."""
+    if not (cfgm.get("altimetrie") or {}).get("controle"):
+        raise HTTPException(status_code=404, detail="section « altimetrie.controle » absente de config/georef_maquettes.yaml")
+    m = _maquette_decrite(id_maquette, cfg, cfgm)
+    if (m.get("positionnement") or {}).get("statut") != "positionnee":
+        raise HTTPException(status_code=422, detail=f"{m['nom']} : maquette non positionnée")
+    return cal_sig.controler(cfg, cfgm, m, maq_sig.niveaux_ngf(cfgm, m))
 
 
 @routeur.get("/maquettes/{id_maquette}/carbone")

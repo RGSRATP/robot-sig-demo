@@ -6,6 +6,7 @@ import { el } from './ui.js';
 
 const SOURCE_BATI = 'sig-contexte-bati';
 const SOURCE_POINTS = 'sig-contexte-points';
+const SOURCE_CALAGE = 'sig-contexte-calage';
 const COULEURS_NIVEAU = { 'élevé': '#e03131', moyen: '#f08c00', 'à vérifier': '#f08c00', faible: '#2f9e44', info: '#868e96' };
 const COULEURS_POINTS = { 'Installation classée': '#7048e8', 'Site potentiellement pollué': '#a61e4d',
   'Cavité souterraine': '#495057', 'Mouvement de terrain': '#e8590c' };
@@ -145,6 +146,73 @@ function niveauxFaceALEau(eau, c, id) {
       + 'l’étanchéité ne sont pas pris en compte ; les crues anciennes sont converties avec le zéro d’échelle actuel.' }),
   );
   return sortie;
+}
+
+/** Section « Contrôle du calage » : terrain RGE ALTI (calage) comparé au MNT LiDAR HD sur l'emprise, constats,
+ * points de contrôle sur la carte colorés par écart entre les deux sources. */
+export function sectionCalage(m, { carte, police }) {
+  if (m.positionnement?.statut !== 'positionnee') return [];
+  const zone = el('div', { className: 'sig-croisement__resultats' });
+  const b = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Comparer au terrain LiDAR HD' });
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    zone.replaceChildren(el('p', { className: 'sig-info', textContent: 'Interrogation du service d’altimétrie de l’IGN…' }));
+    try {
+      const d = await lire(`maquettes/${m.id}/calage`);
+      montrerPointsCalage(carte, police, d);
+      const val = (v) => (v == null ? '—' : `${nf(v)} m`);
+      const st = (s) => (s ? `${nf(s.min)} à ${nf(s.max)} m (moy. ${nf(s.moyenne)})` : 'indisponible');
+      const table = el('table', { className: 'sig-attributs' });
+      for (const [k, v] of [
+        ['Calage', d.calage || '—'],
+        ['Terrain au centre', `${d.source_calage} ${val(d.centre.reference)} · ${d.source_comparaison} ${val(d.centre.comparaison)}`],
+        [`${d.source_calage} sur l’emprise`, st(d.reference)],
+        [`${d.source_comparaison} sur l’emprise`, st(d.comparaison)],
+        ['Écart entre sources', d.ecarts ? `${nf(d.ecarts.min)} à ${nf(d.ecarts.max)} m sur ${d.ecarts.nb} points` : '—'],
+      ]) {
+        const tr = table.insertRow();
+        tr.insertCell().textContent = k;
+        tr.insertCell().textContent = v;
+      }
+      const caseCarte = el('input', { type: 'checkbox', checked: true });
+      caseCarte.addEventListener('change', () => montrerPointsCalage(carte, police, caseCarte.checked ? d : null));
+      zone.replaceChildren(
+        el('ul', { className: 'sig-croisement__liste' }, ...d.constats.map((c) => el('li', {},
+          el('span', { className: 'sig-niveau-risque', style: `background:${COULEURS_NIVEAU[c.niveau] || COULEURS_CONSTAT[c.niveau] || '#868e96'}`, textContent: c.niveau }),
+          ` ${c.texte}`))),
+        table,
+        ...d.erreurs.map((e) => el('p', { className: 'sig-alerte', textContent: e })),
+        el('label', { className: 'sig-option' }, caseCarte, ` Points de contrôle sur la carte (${d.nb_points})`),
+        el('p', { className: 'sig-info', textContent: `Points verts : écart entre sources ≤ ${nf(d.ecart_tolere_m)} m ; orange : jusqu’à `
+          + `${nf(d.amplitude_signalee_m)} m ; rouges : au-delà (terrain modifié entre les relevés ?). Le calage n’est pas modifié par ce contrôle.` }),
+      );
+    } catch (e) {
+      zone.replaceChildren(el('p', { className: 'sig-erreur', textContent: e.message }));
+    }
+    b.disabled = false;
+  });
+  return [el('section', { className: 'sig-croisement' }, el('h4', { textContent: 'Contrôle du calage vertical' }), b, zone)];
+}
+
+const COULEURS_CONSTAT = { conforme: '#2f9e44' };
+
+function montrerPointsCalage(carte, police, d) {
+  if (!carte.getSource(SOURCE_CALAGE)) {
+    carte.addSource(SOURCE_CALAGE, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    carte.addLayer({ id: `${SOURCE_CALAGE}-points`, type: 'circle', source: SOURCE_CALAGE,
+      paint: { 'circle-radius': 5, 'circle-color': ['get', 'couleur'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.2 } });
+    carte.addLayer({ id: `${SOURCE_CALAGE}-ecart`, type: 'symbol', source: SOURCE_CALAGE, minzoom: 17,
+      layout: { 'text-field': ['get', 'etiquette'], 'text-font': [police], 'text-size': 10, 'text-offset': [0, 1.1] },
+      paint: { 'text-color': '#212529', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 } });
+  }
+  const features = (d?.points || []).map((p) => {
+    const e = p.reference != null && p.comparaison != null ? p.reference - p.comparaison : null;
+    const a = e == null ? null : Math.abs(e);
+    const couleur = a == null ? '#868e96' : a <= d.ecart_tolere_m ? '#2f9e44' : a <= d.amplitude_signalee_m ? '#f08c00' : '#e03131';
+    return { type: 'Feature', geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+      properties: { couleur, etiquette: e == null ? 'sans donnée' : `${e >= 0 ? '+' : '−'}${nf(Math.abs(e))} m` } };
+  });
+  carte.getSource(SOURCE_CALAGE).setData({ type: 'FeatureCollection', features });
 }
 
 /** Section « Carbone » de la fiche d'une maquette : ordre de grandeur par matériau, fiabilité, export CSV. */

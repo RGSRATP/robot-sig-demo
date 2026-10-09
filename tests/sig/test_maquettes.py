@@ -401,3 +401,17 @@ def test_niveaux_ngf_sans_etage_ni_local_points_bas_et_haut(inv, cfgm):
     n = maq.niveaux_ngf(cfgm, m)
     h = m["positionnement"]["hauteurs_affichees"]
     assert n["source"] == "modèle 3D" and [x["altitude_ngf"] for x in n["niveaux"]] == pytest.approx([60 + h[0], 60 + h[1]], abs=0.01)
+
+
+def test_api_controle_du_calage(client, inv, cfgm, monkeypatch):
+    from serveur.sig import reseau
+    cfgm["altimetrie"]["controle"] = {"ressource_comparaison": "lidar", "points_max": 12, "ecart_tolere_m": 0.5,
+                                      "amplitude_signalee_m": 2}
+    terrain = {"lidar": 60.2}
+    monkeypatch.setattr(reseau, "client", lambda cfg: httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(
+        200, json={"elevations": [terrain.get(req.url.params["resource"], ALTITUDE_TERRAIN)] * len(req.url.params["lon"].split("|"))}))))
+    d = client.get(f"/api/sig/maquettes/{inv['methode2a_site_cc49_identifie']['id']}/calage").json()
+    assert d["centre"]["ecart_m"] == pytest.approx(-0.2) and d["constats"][0]["niveau"] == "conforme"
+    assert d["niveau_proche_terrain"]["nom"] == "N00"   # plancher à 80 m, 19,8 m au-dessus du terrain : à vérifier
+    assert d["constats"][-1]["niveau"] == "à vérifier"
+    assert client.get(f"/api/sig/maquettes/{inv['sans_georeferencement']['id']}/calage").status_code == 422
