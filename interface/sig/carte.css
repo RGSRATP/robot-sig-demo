@@ -429,3 +429,21 @@ a.sig-bouton { text-decoration: none; display: inline-block; }
 .sig-legende-vue .sig-legende { grid-template-columns: 1fr; }
 .sig-app .sig-legende-vue__sous { margin: 8px 0 4px; font-size: 12px; border: 0; padding: 0; }
 .sig-legende-vue__texte { margin: 4px 0; color: var(--sig-encre-2); }
+
+/* ---------- plan de coupe : réglages pas à pas, poignée de décalage ---------- */
+.sig-pas { display: grid; grid-template-columns: 28px minmax(56px, 1fr) 28px auto auto; align-items: center; gap: 4px; margin: 8px 0; }
+.sig-pas__libelle { grid-column: 1 / -1; font-weight: 500; }
+.sig-pas__bouton { height: 28px; border: 1px solid var(--sig-trait); border-radius: 4px; background: var(--sig-fond); color: var(--sig-bleu);
+  font: 600 16px/1 var(--sig-police); cursor: pointer; user-select: none; touch-action: none; }
+.sig-pas__bouton:hover:not(:disabled) { background: var(--sig-bleu-clair); }
+.sig-pas__valeur { height: 28px; width: 100%; min-width: 0; text-align: center; border: 1px solid var(--sig-trait); border-radius: 4px;
+  font: 13px var(--sig-police); font-variant-numeric: tabular-nums; }
+.sig-pas__choix { height: 28px; font-size: 12px; }
+.sig-pas__zero { height: 28px; padding: 0 8px; border: 1px solid var(--sig-trait); border-radius: 4px; background: var(--sig-fond);
+  color: var(--sig-encre-2); cursor: pointer; }
+.sig-poignee-decalage { display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: grab; }
+.sig-poignee-decalage:active { cursor: grabbing; }
+.sig-poignee-decalage__fleche { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #e8590c;
+  color: #fff; font: 700 18px/1 system-ui, sans-serif; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.sig-poignee-decalage__valeur { padding: 1px 6px; border-radius: 8px; background: rgba(255,255,255,.92); color: #7a2e00;
+  font: 600 11px/1.4 var(--sig-police); white-space: nowrap; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
