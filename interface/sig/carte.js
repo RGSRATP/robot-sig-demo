@@ -441,16 +441,21 @@ export async function monterCarte(conteneur) {
     carte.getCanvas().style.cursor = touche ? 'pointer' : '';
   });
 
+  // Vues thématiques : onglets montrés tout de suite, appliqués une fois couches, maquettes et temps réel prêts
+  const vues = new GestionnaireVues(cfg.vues || [], { carte, coque, gauche: g, couches, tempsReel, relief, batiments, lidar, maquettes });
+  vues.installer();
   const demarrer = async () => {
-    if (relief) { relief.appliquer(); relief.majCase(); }
-    if (batiments) batiments.appliquer();
-    await couches.demarrer();
-    await maquettes.demarrer(cfg.police);
-    await tempsReel.demarrer();
-    mesure.installer();
-    coupe.installer(cfg.police);
-    // Vues thématiques : onglets du bandeau, une fois couches, maquettes et temps réel prêts
-    new GestionnaireVues(cfg.vues || [], { carte, coque, gauche: g, couches, tempsReel, relief, batiments, lidar, maquettes }).installer();
+    try {
+      if (relief) { relief.appliquer(); relief.majCase(); }
+      if (batiments) batiments.appliquer();
+      await couches.demarrer();
+      await maquettes.demarrer(cfg.police);
+      await tempsReel.demarrer();
+      mesure.installer();
+      coupe.installer(cfg.police);
+    } finally {
+      vues.signalerPret();   // même après un échec : une vue demandée s'applique à ce qui est chargé
+    }
   };
   if (carte.loaded()) demarrer();
   else carte.once('load', demarrer);

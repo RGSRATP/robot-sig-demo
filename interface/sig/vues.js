@@ -59,6 +59,8 @@ export class GestionnaireVues {
     this.r = reglages;
     this.active = null;
     this._jeton = 0;
+    // les onglets sont montrés dès l'ouverture ; une vue n'est appliquée qu'une fois couches et maquettes chargées
+    this.pret = new Promise((r) => { this.signalerPret = () => { this._pret = true; r(); }; });
   }
 
   installer() {
@@ -74,14 +76,19 @@ export class GestionnaireVues {
     this.legende = el('aside', { className: 'sig-legende-vue', hidden: true });
     this.r.coque.zone.append(this.legende);
     window.addEventListener('hashchange', () => this._depuisAdresse());
-    if (!this._depuisAdresse()) this._marquer(this.vues[0].id);   // à l'ouverture : réglages d'origine, sans les imposer
+    const v = this._vueAdresse();
+    this._marquer(v ? v.id : this.vues[0].id);   // à l'ouverture sans #vue= : réglages d'origine, sans les imposer
+    if (v) this.appliquer(v);
+  }
+
+  _vueAdresse() {
+    const id = new URLSearchParams(window.location.hash.slice(1)).get('vue');
+    return this.vues.find((x) => x.id === id) || null;
   }
 
   _depuisAdresse() {
-    const id = new URLSearchParams(window.location.hash.slice(1)).get('vue');
-    const v = this.vues.find((x) => x.id === id);
+    const v = this._vueAdresse();
     if (v) this.appliquer(v);
-    return Boolean(v);
   }
 
   _marquer(id) {
@@ -96,6 +103,13 @@ export class GestionnaireVues {
     const r = this.r;
     const jeton = (this._jeton += 1);
     this._marquer(v.id);
+    if (!this._pret) {
+      this.legende.hidden = false;
+      this.legende.replaceChildren(el('h3', { className: 'sig-legende-vue__titre', textContent: v.libelle }),
+        el('p', { className: 'sig-legende-vue__texte', textContent: 'Chargement des couches et des maquettes…' }));
+      await this.pret;
+      if (jeton !== this._jeton) return;
+    }
     if ('couches' in v) r.couches.definirVisibles(v.couches === 'toutes' ? null : v.couches);
     if ('temps_reel' in v) r.tempsReel.definirVisibles(v.temps_reel === 'toutes' ? null : v.temps_reel);
     if ('relief' in v && r.relief) r.relief.definirActif(v.relief);
