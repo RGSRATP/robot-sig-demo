@@ -13,7 +13,7 @@ import { afficherBatiment, afficherTempsReel, fermerFiche, monterFiche } from '.
 import { versLambert93 } from './lambert93.js';
 import { GestionnaireLocaux } from './locaux.js';
 import { GestionnaireMaquettes } from './maquettes.js';
-import { auSol } from './camera.js';
+import { auSol, libererSousSol, viserSousSol } from './camera.js';
 import { GestionnaireRelief, idsRelief, styleRelief } from './relief.js';
 import { GestionnaireBatiments, SOURCE_BATIMENTS, styleBatiments } from './batiments.js';
 import { GestionnaireLidar } from './lidar.js';
@@ -249,6 +249,7 @@ export async function monterCarte(conteneur) {
     canvasContextAttributes: { antialias: true },
   });
   carte.setVerticalFieldOfView(cfg.champ_vision_deg);
+  libererSousSol(carte);   // s'approcher et tourner autour d'un objet en sous-sol (camera.js)
   carte.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left');
   controles(coque.zone, carte, cfg);
   piedDePage(coque.pied, carte);
@@ -318,6 +319,7 @@ export async function monterCarte(conteneur) {
       }),
     });
   const c3d = new CoucheMaquettes3D();
+  viserSousSol(carte, c3d);   // molette sur un objet enterré : pivot de la vue à sa profondeur
   locaux = new GestionnaireLocaux(carte, c3d, {
     panneau: pLocaux,
     ouvrirVolet: () => g.ouvrir('locaux'),
