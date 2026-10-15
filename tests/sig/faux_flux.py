@@ -2,6 +2,7 @@
 exception OGC, page HTML, export volumineux, panne. Aucun accès réseau pendant les tests."""
 from __future__ import annotations
 
+import gzip
 import json
 
 import httpx
@@ -11,6 +12,7 @@ GEOJSON = "https://faux.ods.test/api/explore/v2.1/catalog/datasets/gares/exports
 GEOJSON_L93 = "https://faux.ods.test/l93.geojson"
 GEOJSON_HTML = "https://faux.ods.test/portail"
 GEOJSON_GROS = "https://faux.ods.test/gros.geojson"
+GEOJSON_GZIP = "https://faux.ods.test/compresse.geojson"
 
 # Zonages en Lambert 93 autour de Massy (5 objets) : pagination par 2
 ZONES = [
@@ -53,6 +55,9 @@ class FauxFlux:
             return httpx.Response(200, json={"type": "FeatureCollection", "features": ZONES[:2]})
         if url == GEOJSON_HTML:
             return httpx.Response(200, text="<html>Portail : identifiez-vous</html>")
+        if url == GEOJSON_GZIP:   # comme les API Explore : export compressé
+            corps = gzip.compress(json.dumps({"type": "FeatureCollection", "features": GARES}).encode())
+            return httpx.Response(200, headers={"content-encoding": "gzip", "content-type": "application/geo+json"}, content=corps)
         if url == GEOJSON_GROS:
             return httpx.Response(200, content=json.dumps({"type": "FeatureCollection", "features": ZONES * 2000}).encode())
         return httpx.Response(404, text="introuvable")

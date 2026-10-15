@@ -55,6 +55,9 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         url = fonds[nom].get("url")
         if not isinstance(url, str) or not all(p in url for p in ("{z}", "{x}", "{y}")):
             raise erreur(f"« fonds_ign.{nom}.url » doit contenir {{z}}, {{x}} et {{y}}")
+        zf = fonds[nom].get("zoom_max", 19)
+        if not isinstance(zf, int) or isinstance(zf, bool) or not 0 <= zf <= 22:
+            raise erreur(f"« fonds_ign.{nom}.zoom_max » doit être un entier entre 0 et 22")
 
     zmax = carte.get("zoom_max", 22)
     if not isinstance(zmax, (int, float)) or isinstance(zmax, bool) or not zoom <= zmax <= 24:
@@ -431,7 +434,7 @@ def _controler_flux(cfg: dict, section: str, services: list, erreur) -> None:
                 raise erreur(f"{nom} : « {cle} » doit être un nombre positif")
         if "style" in s and not isinstance(s["style"], dict):
             raise erreur(f"{nom} : « style » doit être un dictionnaire")
-        for cle in ("export", "export_couche", "systeme", "champ_libelle", "attribution"):
+        for cle in ("export", "export_couche", "systeme", "champ_libelle", "attribution", "format_sortie", "tri"):
             if cle in s and not isinstance(s[cle], str):
                 raise erreur(f"{nom} : « {cle} » doit être un texte")
         id_ = identifiant_wfs(s) if wfs else identifiant_geojson(s)
@@ -487,6 +490,7 @@ def config_carte(cfg: dict) -> dict:
                 "libelle": f.get("libelle", nom),
                 "url": f["url"],
                 "attribution": f.get("attribution", ""),
+                "zoom_max": f.get("zoom_max", 19),   # dernier niveau publié ; au-delà, tuiles agrandies
             }
             for nom, f in fonds.items()
             if nom != "defaut" and isinstance(f, dict)

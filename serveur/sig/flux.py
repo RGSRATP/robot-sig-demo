@@ -74,6 +74,10 @@ def _collection(r: httpx.Response) -> dict:
         exc = _exception_ows(r.text)
         raise ErreurService(f"réponse du service en erreur{exc}" if exc
                             else "réponse illisible (ce n'est pas du GeoJSON : URL ou nom de couche à vérifier)") from None
+    return _verifier_collection(corps)
+
+
+def _verifier_collection(corps) -> dict:
     if not isinstance(corps, dict) or corps.get("type") != "FeatureCollection" or not isinstance(corps.get("features"), list):
         raise ErreurService("réponse inattendue : une collection d'objets GeoJSON (FeatureCollection) est attendue")
     return corps
@@ -122,14 +126,22 @@ def telecharger_wfs(service: dict, cfg: dict, client: httpx.Client) -> tuple[gpd
     max_objets = int(service.get("max_objets") or cfg["esri"]["max_objets"])
     base = {
         "SERVICE": "WFS", "VERSION": "2.0.0", "REQUEST": "GetFeature", "TYPENAMES": service["couche"],
-        "OUTPUTFORMAT": "application/json", "SRSNAME": systeme,
+        # MapServer (Sandre, BRGM, Géorisques) : « application/json; subtype=geojson », déclaré dans « format_sortie »
+        "OUTPUTFORMAT": service.get("format_sortie") or "application/json", "SRSNAME": systeme,
         # WFS 2.0 : axes de EPSG:4326 dans l'ordre latitude, longitude
         "BBOX": f"{sud},{ouest},{nord},{est},urn:ogc:def:crs:EPSG::4326",
     }
     features, total, decalage = [], None, 0
     while len(features) < max_objets:
         n_demande = min(taille, max_objets - len(features))
-        page = _collection(_get(client, service["url"], {**base, "COUNT": n_demande, "STARTINDEX": decalage}))
+        params = {**base, "COUNT": n_demande}
+        # Décalage seulement à partir de la 2e page : GeoServer (Airparif) refuse un décalage sans ordre de tri
+        # quand la couche n'a pas de clé primaire ; « tri » (SORTBY) le fournit pour les couches à plusieurs pages.
+        if decalage:
+            params["STARTINDEX"] = decalage
+        if service.get("tri"):
+            params["SORTBY"] = service["tri"]
+        page = _collection(_get(client, service["url"], params))
         if total is None:
             total = page.get("numberMatched") if isinstance(page.get("numberMatched"), int) else page.get("totalFeatures")
             total = total if isinstance(total, int) else None
@@ -155,8 +167,8 @@ def telecharger_wfs(service: dict, cfg: dict, client: httpx.Client) -> tuple[gpd
 
 # ---------------------------------------------------------------- GeoJSON par URL
 
-def _lire_borne(client: httpx.Client, url: str, max_octets: int) -> httpx.Response:
-    """Lecture plafonnée : un export trop gros est refusé au lieu de saturer la mémoire."""
+def _lire_borne(client: httpx.Client, url: str, max_octets: int) -> dict:
+    """Lecture plafonnée (contenu décompressé) : un export trop gros est refusé au lieu de saturer la mémoire."""
     try:
         with client.stream("GET", url) as r:
             if r.status_code in (401, 403):
@@ -164,14 +176,18 @@ def _lire_borne(client: httpx.Client, url: str, max_octets: int) -> httpx.Respon
             if r.status_code >= 400:
                 raise ErreurService(f"réponse HTTP {r.status_code} du service")
             contenu = bytearray()
-            for morceau in r.iter_bytes():
+            for morceau in r.iter_bytes():      # déjà décompressé (gzip des API Explore)
                 contenu += morceau
                 if len(contenu) > max_octets:
                     raise ErreurService(f"fichier de plus de {max_octets // 1_000_000} Mo (« max_mo ») : "
                                         "filtrer à la source (paramètre « where » d'une API Explore) ou déposer un extrait")
-            return httpx.Response(r.status_code, headers=r.headers, content=bytes(contenu))
     except httpx.HTTPError as e:
         raise ErreurService(f"service {reseau.message_erreur(e)}") from None
+    try:
+        corps = json.loads(bytes(contenu).decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError):
+        raise ErreurService("réponse illisible (ce n'est pas du GeoJSON : URL à vérifier)") from None
+    return _verifier_collection(corps)
 
 
 def telecharger_geojson(service: dict, cfg: dict, client: httpx.Client) -> tuple[gpd.GeoDataFrame, dict]:
@@ -179,7 +195,7 @@ def telecharger_geojson(service: dict, cfg: dict, client: httpx.Client) -> tuple
     crs = _crs(service, SYSTEME_GEOJSON_DEFAUT)
     max_octets = int(float(service.get("max_mo", MAX_MO_GEOJSON)) * 1_000_000)
     max_objets = int(service.get("max_objets") or cfg["esri"]["max_objets"])
-    page = _collection(_lire_borne(client, service["url"], max_octets))
+    page = _lire_borne(client, service["url"], max_octets)
     gdf, ecartes = _vers_gdf(page["features"], crs)
     nb_lus = len(gdf)
 

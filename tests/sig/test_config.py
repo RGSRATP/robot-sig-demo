@@ -233,7 +233,7 @@ def test_nom_de_l_application_transmis_a_l_interface():
 
 def test_vues_thematiques_valides_et_transmises():
     vues = cfg_sig.config_carte(cfg_sig.charger_config())["vues"]
-    assert [v["id"] for v in vues] == ["generale", "inondations", "carbone", "ouvrages"]
+    assert [v["id"] for v in vues] == ["generale", "inondations", "carbone", "ouvrages", "sous-sol", "ferroviaire", "reseaux"]
 
 
 @pytest.mark.parametrize("vue, attendu", [

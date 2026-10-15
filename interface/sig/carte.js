@@ -46,7 +46,7 @@ function styleInitial(cfg) {
   const sources = {};
   const layers = [{ id: 'sig-vide', type: 'background', paint: { 'background-color': '#eef0f2' } }];
   for (const f of cfg.fonds) {
-    sources[`fond-${f.id}`] = { type: 'raster', tiles: [f.url], tileSize: 256, attribution: f.attribution, maxzoom: 19 };
+    sources[`fond-${f.id}`] = { type: 'raster', tiles: [f.url], tileSize: 256, attribution: f.attribution, maxzoom: f.zoom_max ?? 19 };
     layers.push({ id: `fond-${f.id}`, type: 'raster', source: `fond-${f.id}`,
       layout: { visibility: f.id === cfg.fond_defaut ? 'visible' : 'none' } });
   }

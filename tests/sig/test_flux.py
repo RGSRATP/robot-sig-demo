@@ -39,9 +39,15 @@ def test_wfs_pagination_emprise_et_systeme(cfg_test):
     assert c.systeme == "EPSG:2154" and c.systeme_source == "demandé au service"
     assert c.service["type"] == "WFS" and c.service["couche"] == "wfs_du:zone_urba"
     p = [dict(r.url.params) for r in serveur.requetes]
-    assert [q["STARTINDEX"] for q in p] == ["0", "2", "4"]                # 3 pages de 2
+    assert [q.get("STARTINDEX") for q in p] == [None, "2", "4"]           # 3 pages de 2, pas de décalage en 1re page
     assert p[0]["BBOX"] == "48.69,2.2,48.76,2.32,urn:ogc:def:crs:EPSG::4326"   # latitude, longitude en WFS 2.0
     assert p[0]["SRSNAME"] == "EPSG:2154" and p[0]["OUTPUTFORMAT"] == "application/json"
+
+
+def test_wfs_format_de_sortie_declare_mapserver(cfg_test):
+    serveur = ff.FauxFlux()
+    _couche(cfg_test, _wfs(format_sortie="application/json; subtype=geojson"), "WFS", serveur)
+    assert dict(serveur.requetes[0].url.params)["OUTPUTFORMAT"] == "application/json; subtype=geojson"
 
 
 def test_wfs_max_objets_tronque_et_signale(cfg_test):
@@ -77,6 +83,12 @@ def test_geojson_systeme_par_defaut_wgs84_et_attributs_imbriques(cfg_test):
     assert any("1 objet(s) sans géométrie écarté(s)" in a for a in c.avertissements)
     gdf, _ = objets._lire(c)
     assert '"cp": "75001"' in gdf.loc[gdf["nom"] == "Châtelet-Les Halles", "adresse"].iloc[0]
+
+
+def test_geojson_reponse_compressee(cfg_test):
+    """Les API Explore envoient leurs exports en gzip (cause de l'échec du premier essai réel, 15/10/2026)."""
+    c = _couche(cfg_test, _geojson(url=ff.GEOJSON_GZIP), "GeoJSON", ff.FauxFlux())
+    assert c.nb_objets == 3
 
 
 def test_geojson_filtre_d_emprise(cfg_test):

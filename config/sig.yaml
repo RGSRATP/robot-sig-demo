@@ -23,8 +23,8 @@ vues:
     lidar: false
   - id: inondations
     libelle: "Inondations"
-    description: "Vigilance crues par tronçon, hauteurs des cours d'eau, altitude du point bas des ouvrages. Fiche d'un ouvrage, « Contexte » : courbe du niveau de l'eau, crues historiques et niveaux."
-    couches: []
+    description: "Vigilance crues par tronçon, hauteurs des cours d'eau, altitude du point bas des ouvrages ; zones réglementaires et historiques (PPR, TRI, SDRIF-E, caves inondées en 1910). Fiche d'un ouvrage, « Contexte » : courbe du niveau de l'eau, crues historiques et niveaux."
+    couches: ["Caves inondées", "PPR inondation", "risque important d'inondation", "Zones inondables", "risque inondation (PLU"]
     temps_reel: [vigicrues, hubeau]
     relief: false
     batiments: false
@@ -55,6 +55,34 @@ vues:
       - { libelle: "Tunnels (intergares)", motifs: ["*/intergare/*"], couleur: "#EB6834" }
       - { libelle: "Ouvrages annexes", motifs: ["*/ouvrage annexe/*"], couleur: "#00AA91" }   # vert d'eau RATP
     camera: maquettes
+  # Vues du catalogue Open Data RATPI (15/10/2026) : couches désignées par une partie de leur libellé
+  - id: sous-sol
+    libelle: "Sous-sol et risques"
+    description: "Carrières, cavités, mouvements de terrain, points d'eau du sous-sol (BSS), retrait-gonflement des argiles, sols pollués (SIS), autour des maquettes."
+    couches: ["Carrières", "carrières (PLU", "Cavités", "Mouvements de terrain", "Points d'eau du sous-sol", "Retrait-gonflement", "information sur les sols"]
+    temps_reel: []
+    relief: false
+    batiments: false
+    lidar: false
+    camera: maquettes
+  - id: ferroviaire
+    libelle: "Réseau ferré"
+    description: "Tracés et gares IDFM, accès des gares, lignes et gares en projet, réseau ferré national : ponts-route, passages souterrains, ouvrages en terre (SNCF Réseau)."
+    couches: ["Tracés du réseau ferré", "Gares et stations IDF", "Accès des gares", "en projet (IDFM)", "Lignes du réseau ferré national", "Ponts-route", "Passages souterrains", "Ouvrages en terre"]
+    temps_reel: []
+    relief: false
+    batiments: false
+    lidar: false
+    camera: { centre_wgs84: [2.35, 48.85], zoom: 11 }
+  - id: reseaux
+    libelle: "Réseaux et urbanisme"
+    description: "Réseaux de gaz (NaTran, GRDF), zonage du PLU, servitudes d'utilité publique, parcelles cadastrales (Massy, Champigny), chantiers à Paris."
+    couches: ["Réseau de transport de gaz", "Réseau GRDF", "Zonage du PLU", "Servitudes", "Parcelles", "Chantiers", "Travaux perturbants"]
+    temps_reel: []
+    relief: false
+    batiments: true
+    lidar: false
+    camera: { centre_wgs84: [2.262, 48.7235], zoom: 15 }
 
 carte:
   centre_wgs84: [2.35, 48.85]   # Île-de-France
@@ -77,6 +105,22 @@ fonds_ign:   # Géoplateforme IGN, WMTS — URL à vérifier au lot 0
     libelle: "Orthophotos"
     url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
     attribution: "© IGN Géoplateforme"
+  # Fonds historiques (catalogue n° 56, « Remonter le temps ») : anciennes carrières, remblais, tracés disparus
+  ortho_1950:
+    libelle: "Photos aériennes 1950-1965"
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS.1950-1965&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/png&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+    attribution: "© IGN Géoplateforme"
+    zoom_max: 18
+  scan50_1950:
+    libelle: "Carte au 1:50 000 (1950)"
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.MAPS.SCAN50.1950&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+    attribution: "© IGN Géoplateforme"
+    zoom_max: 15
+  etatmajor:
+    libelle: "Carte d'état-major (1820-1866)"
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.ETATMAJOR40&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+    attribution: "© IGN Géoplateforme"
+    zoom_max: 15
 
 # Relief (lot 5) : modèles numériques de terrain de la Géoplateforme, appelés par le navigateur.
 # Service WMS (le WMTS d'altitude n'existe qu'en coordonnées géographiques) : altitudes NGF en flottants 32 bits
@@ -314,7 +358,310 @@ services_esri:
     champ_libelle: "nomdep"
     style: { couleur: "#495057", opacite: 0.05, epaisseur: 1.5 }
     visible: false
+  # ---- Catalogue Open Data RATPI (15/10/2026) : services ArcGIS de l'APUR et de L'Institut Paris Region
+  - libelle: "Zones inondables (SDRIF-E, Institut Paris Region)"   # catalogue n° 18
+    url: "https://geoweb.iau-idf.fr/agsmap1/rest/services/OPENDATA/OpendataIAU2/MapServer/48"
+    cache_heures: 168
+    visible: false
+  - libelle: "Emprises des infrastructures de transport (APUR)"   # catalogue n° 19
+    url: "https://carto2.apur.org/apur/rest/services/OPENDATA/EQUIPEMENT_PONCTUEL/MapServer/11"
+    cache_heures: 168
+    visible: false
+  - libelle: "Plans d'eau (APUR)"   # catalogue n° 19
+    url: "https://carto2.apur.org/apur/rest/services/OPENDATA/PLAN_EAU/MapServer/0"
+    cache_heures: 168
+    visible: false
 #  - libelle: "Ouvrages InfraGéo"
 #    url: "https://<portail>/arcgis/rest/services/<service>/FeatureServer/0"
 #    jeton_env: "INFRAGEO_JETON"
 #    export: "ouvrages_infrageo.gpkg"
+
+# Services WFS 2.0 (catalogue Open Data, 15/10/2026), interrogés par le serveur. Clés : libelle, url, couche,
+# emprise_wgs84 [ouest, sud, est, nord] (obligatoire : services nationaux) ; facultatives : systeme (défaut EPSG:2154),
+# format_sortie (défaut application/json ; MapServer : « application/json; subtype=geojson »), tri (SORTBY),
+# taille_page (défaut 1000), max_objets, cache_heures, export, attribution, style, visible, champ_libelle.
+# Couches denses (parcelles, PLU, servitudes) : déclarées par site (Massy, Champigny), jamais sur toute la région.
+services_wfs:
+  - libelle: "Communes (ADMIN EXPRESS, IGN)"   # catalogue n° 5
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "ADMINEXPRESS-COG.LATEST:commune"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "IGN ADMIN EXPRESS"
+    visible: false
+  - libelle: "IRIS (INSEE, IGN)"   # catalogue n° 29
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "STATISTICALUNITS.IRIS:contours_iris"
+    emprise_wgs84: [2.15, 48.72, 2.62, 48.95]
+    cache_heures: 168
+    attribution: "INSEE / IGN Contours IRIS"
+    visible: false
+  - libelle: "Voies ferrées (BD TOPO, IGN)"   # catalogue n° 1
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "BDTOPO_V3:troncon_de_voie_ferree"
+    emprise_wgs84: [2.15, 48.72, 2.62, 48.95]
+    cache_heures: 168
+    attribution: "IGN BD TOPO"
+    visible: false
+  - libelle: "Cours d'eau (BD TOPO, IGN)"   # catalogue n° 1
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "BDTOPO_V3:cours_d_eau"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "IGN BD TOPO"
+    visible: false
+  - libelle: "Parcelles cadastrales – Massy"   # catalogue n° 6
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle"
+    emprise_wgs84: [2.235, 48.71, 2.29, 48.735]
+    cache_heures: 168
+    attribution: "IGN Parcellaire Express"
+    visible: false
+  - libelle: "Parcelles cadastrales – Champigny"   # catalogue n° 6
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle"
+    emprise_wgs84: [2.49, 48.8, 2.55, 48.83]
+    cache_heures: 168
+    attribution: "IGN Parcellaire Express"
+    visible: false
+  - libelle: "Zonage du PLU – Massy"   # catalogue n° 41
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "wfs_du:zone_urba"
+    emprise_wgs84: [2.235, 48.71, 2.29, 48.735]
+    cache_heures: 168
+    attribution: "Géoportail de l'Urbanisme"
+    visible: false
+  - libelle: "Zonage du PLU – Champigny"   # catalogue n° 41
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "wfs_du:zone_urba"
+    emprise_wgs84: [2.49, 48.8, 2.55, 48.83]
+    cache_heures: 168
+    attribution: "Géoportail de l'Urbanisme"
+    visible: false
+  - libelle: "Servitudes d'utilité publique – Massy"   # catalogue n° 41
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "wfs_sup:assiette_sup_s"
+    emprise_wgs84: [2.235, 48.71, 2.29, 48.735]
+    cache_heures: 168
+    attribution: "Géoportail de l'Urbanisme"
+    visible: false
+  - libelle: "Servitudes d'utilité publique – Champigny"   # catalogue n° 41
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "wfs_sup:assiette_sup_s"
+    emprise_wgs84: [2.49, 48.8, 2.55, 48.83]
+    cache_heures: 168
+    attribution: "Géoportail de l'Urbanisme"
+    visible: false
+  - libelle: "Cours d'eau (BD TOPAGE, Sandre)"   # catalogue n° 53
+    url: "https://services.sandre.eaufrance.fr/geo/topage"
+    couche: "sa:CoursEau_FXX"
+    format_sortie: "application/json; subtype=geojson"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "Sandre / OFB BD TOPAGE"
+    visible: false
+  - libelle: "Plans d'eau (BD TOPAGE, Sandre)"   # catalogue n° 53
+    url: "https://services.sandre.eaufrance.fr/geo/topage"
+    couche: "sa:PlanEau_FXX"
+    format_sortie: "application/json; subtype=geojson"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "Sandre / OFB BD TOPAGE"
+    visible: false
+  - libelle: "Points d'eau du sous-sol (BSS, BRGM)"   # catalogue n° 23
+    url: "http://geoservices.brgm.fr/geologie"
+    couche: "ms:BSS_EAU_POINT"
+    format_sortie: "application/json; subtype=geojson; charset=utf-8"
+    emprise_wgs84: [2.15, 48.72, 2.62, 48.95]
+    cache_heures: 168
+    attribution: "BRGM BSS"
+    visible: false
+  - libelle: "Cavités souterraines (Géorisques)"   # catalogue n° 60
+    url: "https://www.georisques.gouv.fr/services"
+    couche: "ms:CAVITE_LOCALISEE"
+    format_sortie: "application/json; subtype=geojson; charset=utf-8"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "Géorisques / BRGM"
+    visible: false
+  - libelle: "Mouvements de terrain (Géorisques)"   # catalogue n° 60
+    url: "https://www.georisques.gouv.fr/services"
+    couche: "ms:MVT_LOCALISE"
+    format_sortie: "application/json; subtype=geojson; charset=utf-8"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "Géorisques / BRGM"
+    visible: false
+  - libelle: "Communes à PPR inondation approuvé (Géorisques)"   # catalogue n° 51
+    url: "https://www.georisques.gouv.fr/services"
+    couche: "ms:PPRN_COMMUNE_RISQINOND_APPROUV"
+    format_sortie: "application/json; subtype=geojson; charset=utf-8"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "Géorisques"
+    visible: false
+  - libelle: "Territoires à risque important d'inondation (TRI)"   # catalogue n° 51
+    url: "https://www.georisques.gouv.fr/services"
+    couche: "ms:LIMITETRI_FXX"
+    format_sortie: "application/json; subtype=geojson; charset=utf-8"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "Géorisques"
+    visible: false
+  - libelle: "Secteurs d'information sur les sols (SIS)"   # catalogue n° 40
+    url: "https://www.georisques.gouv.fr/services"
+    couche: "ms:SSP_CLASSIF_SIS_GE"
+    format_sortie: "application/json; subtype=geojson; charset=utf-8"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "Géorisques"
+    visible: false
+  - libelle: "Retrait-gonflement des argiles (Géorisques)"   # catalogue n° 22
+    url: "https://www.georisques.gouv.fr/services"
+    couche: "ms:ALEARG_REALISE"
+    format_sortie: "application/json; subtype=geojson; charset=utf-8"
+    emprise_wgs84: [2.235, 48.71, 2.29, 48.735]
+    cache_heures: 168
+    attribution: "Géorisques / BRGM"
+    visible: false
+  - libelle: "Alertes pollution en cours (Airparif)"   # catalogue n° 35
+    url: "https://magellan.airparif.asso.fr/geoserver/DIDON/wfs"
+    couche: "DIDON:alrt_idf"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 1
+    attribution: "Airparif (ODbL)"
+    visible: false
+  - libelle: "Émissions par département 2015 (Airparif)"   # catalogue n° 35
+    url: "https://magellan.airparif.asso.fr/geoserver/DIDON/wfs"
+    couche: "DIDON:emi_idf_departement_2015"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "Airparif (ODbL)"
+    visible: false
+
+# GeoJSON par URL (catalogue Open Data, 15/10/2026) : exports des API Explore (Opendatasoft) ou fichiers publiés.
+# Clés : libelle, url ; facultatives : systeme (défaut EPSG:4326, norme GeoJSON), emprise_wgs84 (filtre après lecture),
+# max_mo (défaut 50), max_objets, cache_heures, export, attribution, style, visible, champ_libelle.
+# Jeux nationaux : filtrés par « where » dans l'URL (API Explore) ou par « emprise_wgs84 ».
+services_geojson:
+  - libelle: "Tracés du réseau ferré IDF (IDFM)"   # catalogue n° 15
+    url: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/traces-du-reseau-ferre-idf/exports/geojson"
+    cache_heures: 168
+    attribution: "Île-de-France Mobilités"
+    visible: false
+  - libelle: "Gares et stations IDF (IDFM)"   # catalogue n° 15
+    url: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/emplacement-des-gares-idf/exports/geojson"
+    cache_heures: 168
+    attribution: "Île-de-France Mobilités"
+    visible: false
+  - libelle: "Accès des gares (IDFM)"   # catalogue n° 15
+    url: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/acces/exports/geojson"
+    cache_heures: 168
+    attribution: "Île-de-France Mobilités"
+    visible: false
+  - libelle: "Lignes en projet (IDFM)"   # catalogue n° 15
+    url: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/projets_lignes_idf/exports/geojson"
+    cache_heures: 168
+    attribution: "Île-de-France Mobilités"
+    visible: false
+  - libelle: "Gares en projet (IDFM)"   # catalogue n° 15
+    url: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/projets_arrets_idf/exports/geojson"
+    cache_heures: 168
+    attribution: "Île-de-France Mobilités"
+    visible: false
+  - libelle: "Défibrillateurs du réseau RATP"   # catalogue n° 14
+    url: "https://data.ratp.fr/api/explore/v2.1/catalog/datasets/defibrillateurs-du-reseau-ratp/exports/geojson"
+    cache_heures: 168
+    attribution: "RATP"
+    visible: false
+  - libelle: "Lignes du réseau ferré national (SNCF)"   # catalogue n° 12
+    url: "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/formes-des-lignes-du-rfn/exports/geojson"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "SNCF Réseau"
+    visible: false
+  - libelle: "Ponts-route sur voies ferrées (SNCF)"   # catalogue n° 12
+    url: "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/liste-des-ponts-route/exports/geojson"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "SNCF Réseau"
+    visible: false
+  - libelle: "Passages souterrains (SNCF)"   # catalogue n° 12
+    url: "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/liste-des-passages-souterrains/exports/geojson"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "SNCF Réseau"
+    visible: false
+  - libelle: "Ouvrages en terre (SNCF)"   # catalogue n° 12
+    url: "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/liste-ouvrages-en-terre/exports/geojson"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "SNCF Réseau"
+    visible: false
+  - libelle: "Gares de voyageurs (SNCF)"   # catalogue n° 12
+    url: "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/gares-de-voyageurs/exports/geojson"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "SNCF"
+    visible: false
+  - libelle: "Carrières (Région IDF)"   # catalogue n° 20
+    url: "https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/carrieres/exports/geojson"
+    cache_heures: 168
+    attribution: "Région Île-de-France"
+    visible: false
+  - libelle: "Caves inondées en 1910 (Région IDF)"   # catalogue n° 20
+    url: "https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/zones-des-caves-inondees-1910/exports/geojson"
+    cache_heures: 168
+    attribution: "Région Île-de-France"
+    visible: false
+  - libelle: "Réseau hydrographique principal (Région IDF)"   # catalogue n° 20
+    url: "https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/reseau-hydrographique-principal-simplifie-dile-de-france1/exports/geojson"
+    cache_heures: 168
+    attribution: "Région Île-de-France"
+    visible: false
+  - libelle: "Franchissements d'infrastructures (SDRIF-E)"   # catalogue n° 20
+    url: "https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/franchissements-d-infrastructures-lineaires-sdrif-e/exports/geojson"
+    cache_heures: 168
+    attribution: "Région Île-de-France"
+    visible: false
+  - libelle: "Chantiers en cours à Paris"   # catalogue n° 21
+    url: "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/chantiers-a-paris/exports/geojson"
+    cache_heures: 24
+    attribution: "Ville de Paris"
+    visible: false
+  - libelle: "Travaux perturbants (Paris)"   # catalogue n° 21
+    url: "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/chantiers-perturbants/exports/geojson"
+    cache_heures: 24
+    attribution: "Ville de Paris"
+    visible: false
+  - libelle: "Repères de nivellement (Paris)"   # catalogue n° 21
+    url: "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/plan-de-voirie-repere-de-nivellement/exports/geojson"
+    cache_heures: 168
+    attribution: "Ville de Paris"
+    visible: false
+  - libelle: "Secteurs de risque carrières (PLU Paris)"   # catalogue n° 21
+    url: "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/plub_carriere/exports/geojson"
+    cache_heures: 168
+    attribution: "Ville de Paris"
+    visible: false
+  - libelle: "Secteurs de risque inondation (PLU Paris)"   # catalogue n° 21
+    url: "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/plub_pprizone/exports/geojson"
+    cache_heures: 168
+    attribution: "Ville de Paris"
+    visible: false
+  - libelle: "Réseau de transport de gaz (NaTran, ODRÉ)"   # catalogue n° 25
+    url: "https://opendata.reseaux-energies.fr/api/explore/v2.1/catalog/datasets/trace-du-reseau-grt-250/exports/geojson"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    cache_heures: 168
+    attribution: "ODRÉ / NaTran"
+    visible: false
+  - libelle: "Réseau GRDF – Massy"   # catalogue n° 27
+    url: "https://opendata.grdf.fr/api/explore/v2.1/catalog/datasets/cartographie-du-reseau-grdf-en-service/exports/geojson?where=in_bbox(geo_shape,48.71,2.235,48.735,2.29)"
+    cache_heures: 168
+    attribution: "GRDF"
+    visible: false
+  - libelle: "Établissements scolaires (Éducation nationale)"   # catalogue n° 69
+    url: "https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/fr-en-annuaire-education/exports/geojson?where=code_departement%20in%20(%22075%22,%22092%22,%22093%22,%22094%22)"
+    cache_heures: 168
+    attribution: "Éducation nationale"
+    visible: false
