@@ -110,7 +110,7 @@ export class GestionnaireVues {
       await this.pret;
       if (jeton !== this._jeton) return;
     }
-    if ('couches' in v) r.couches.definirVisibles(v.couches === 'toutes' ? null : v.couches);
+    if ('couches' in v) r.couches.definirVisibles(v.couches === 'toutes' ? null : v.couches, v.libelle);
     if ('temps_reel' in v) r.tempsReel.definirVisibles(v.temps_reel === 'toutes' ? null : v.temps_reel);
     if ('relief' in v && r.relief) r.relief.definirActif(v.relief);
     if ('batiments' in v && r.batiments) r.batiments.definirVisible(v.batiments);

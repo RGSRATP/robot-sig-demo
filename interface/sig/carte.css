@@ -147,6 +147,11 @@
 
 /* ---------- couches ---------- */
 .sig-couches, .sig-maquettes, .sig-services { list-style: none; margin: 0; padding: 0; }
+/* Groupes du gestionnaire de couches : vue ou couches affichées en tête, les autres repliées */
+.sig-groupe-couches { margin: 0 0 10px; }
+.sig-groupe-couches__titre { margin: 6px 0; font-size: 13px; font-weight: 600; color: var(--sig-bleu); cursor: default; }
+summary.sig-groupe-couches__titre { cursor: pointer; }
+.sig-groupe-couches__titre .sig-lien { font-size: 12px; font-weight: 400; margin-left: 6px; }
 .sig-couche { padding: 8px 0 6px; border-bottom: 1px solid var(--sig-trait-2); }
 .sig-couche__tete { display: flex; align-items: center; gap: 8px; }
 .sig-couche__nom { flex: 1; font-weight: 500; overflow-wrap: anywhere; }

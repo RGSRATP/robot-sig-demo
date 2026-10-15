@@ -223,11 +223,13 @@ export class GestionnaireCouches {
   /** Identifiants des couches affichées (pour l'interrogation croisée). */
   /** Couches visibles imposées (vues thématiques) : celles dont le libellé ou le fichier contient l'un des motifs
    *  (insensible à la casse) ; motifs null : visibilité d'origine de l'inventaire. */
-  definirVisibles(motifs) {
-    const norm = (t) => (t || '').toLocaleLowerCase('fr');
+  /** Couches d'une vue (motifs du libellé ou du fichier ; null : vue générale, visibilité d'origine). La liste
+   *  du gestionnaire est alors regroupée : couches de la vue et couches cochées d'abord, les autres repliées. */
+  definirVisibles(motifs, libelleVue = null) {
+    this.vue = motifs == null ? null : { motifs, libelle: libelleVue };
     for (const [id, etat] of this.etats) {
       const c = etat.couche;
-      const v = motifs == null ? c.visible : motifs.some((m) => norm(c.libelle).includes(norm(m)) || norm(c.fichier).includes(norm(m)));
+      const v = motifs == null ? c.visible : this._dansVue(c);
       if (v === etat.visible) continue;
       etat.visible = v;
       this._appliquerVisibilite(id);
@@ -308,10 +310,31 @@ export class GestionnaireCouches {
     }
   }
 
+  _dansVue(c) {
+    if (!this.vue) return false;
+    const norm = (t) => (t || '').toLocaleLowerCase('fr');
+    return this.vue.motifs.some((m) => norm(c.libelle).includes(norm(m)) || norm(c.fichier).includes(norm(m)));
+  }
+
+  /** Groupes de la liste, chacun dans l'ordre d'affichage : en tête, les couches de la vue et les couches cochées
+   *  (cochées d'abord) ; ensuite, repliées, toutes les autres. L'ordre de superposition sur la carte ne change pas. */
+  _groupes() {
+    const tete = [], reste = [];
+    for (const id of this.ordre) {
+      const etat = this.etats.get(id);
+      (etat.visible || this._dansVue(etat.couche) ? tete : reste).push(id);
+    }
+    const cochees = (ids) => ids.filter((id) => this.etats.get(id).visible);
+    return { tete: [...cochees(tete), ...tete.filter((id) => !this.etats.get(id).visible)], reste };
+  }
+
+  /** Monte ou descend une couche d'un cran par rapport à sa voisine affichée dans le même groupe. */
   _deplacer(id, sens) {
-    const i = this.ordre.indexOf(id);
-    const j = i + sens;
-    if (j < 0 || j >= this.ordre.length) return;
+    const { tete, reste } = this._groupes();
+    const groupe = tete.includes(id) ? tete : reste;
+    const voisine = groupe[groupe.indexOf(id) + sens];
+    if (voisine === undefined) return;
+    const i = this.ordre.indexOf(id), j = this.ordre.indexOf(voisine);
     [this.ordre[i], this.ordre[j]] = [this.ordre[j], this.ordre[i]];
     this._appliquerOrdre();
     this._rendre();
@@ -325,6 +348,7 @@ export class GestionnaireCouches {
       etat.visible = coche.checked;
       this._appliquerVisibilite(id);
       if (etat.visible) this._charger(id);
+      this._rendre();   // une couche cochée remonte en tête de liste
     });
     const pastille = el('span', { className: `sig-pastille sig-pastille--${c.geometrie}` });
     pastille.style.setProperty('--c', c.style.couleur);
@@ -356,18 +380,38 @@ export class GestionnaireCouches {
 
   _rendre() {
     const inv = this.inventaire;
-    const liste = el('ul', { className: 'sig-couches' });
-    for (const id of this.ordre) {
-      const li = this._ligne(id);
-      li.querySelector('.sig-couche__info').dataset.info = id;
-      liste.append(li);
-    }
+    const liste = (ids) => {
+      const ul = el('ul', { className: 'sig-couches' });
+      for (const id of ids) {
+        const li = this._ligne(id);
+        li.querySelector('.sig-couche__info').dataset.info = id;
+        ul.append(li);
+      }
+      return ul;
+    };
+    const { tete, reste } = this._groupes();
+    const nbCochees = tete.filter((id) => this.etats.get(id).visible).length;
+    const titreTete = this.vue
+      ? `Vue « ${this.vue.libelle || 'thématique'} » : ${nbCochees} affichée(s) sur ${tete.length}`
+      : `Couches affichées (${nbCochees})`;
+    const retablir = this.vue
+      ? el('button', { type: 'button', className: 'sig-lien', textContent: 'Rétablir la vue',
+          title: 'Cocher exactement les couches de la vue', onclick: () => this.definirVisibles(this.vue.motifs, this.vue.libelle) })
+      : null;
+    const blocTete = el('section', { className: 'sig-groupe-couches' },
+      el('h3', { className: 'sig-groupe-couches__titre' }, titreTete, retablir ? ' ' : null, retablir),
+      tete.length ? liste(tete) : el('p', { className: 'sig-info', textContent: 'Aucune couche affichée : cocher dans la liste ci-dessous.' }));
+    // Autres couches : repliées (l'état ouvert ou fermé est gardé d'un rendu à l'autre)
+    const blocReste = reste.length ? el('details', { className: 'sig-groupe-couches', open: !!this._resteOuvert },
+      el('summary', { className: 'sig-groupe-couches__titre', textContent: `${this.vue ? 'Autres couches' : 'Couches masquées'} (${reste.length})` }),
+      liste(reste)) : null;
+    if (blocReste) blocReste.addEventListener('toggle', () => { this._resteOuvert = blocReste.open; });
     const vide = inv.couches.length ? null
       : el('p', { className: 'sig-info', textContent: `Aucune couche chargeable dans ${inv.dossier}.` });
 
     this.panneau.replaceChildren(
       el('p', { className: 'sig-resume', textContent: `${inv.couches.length} couche(s) · ordre d'affichage du dessus vers le dessous` }),
-      ...[vide, liste, this._blocServices()].filter(Boolean));
+      ...[vide, blocTete, blocReste, this._blocServices()].filter(Boolean));
     this.panneaux.anomalies.replaceChildren(this._blocAnomalies());
     this.surAnomalies(inv.anomalies.length);
   }
