@@ -128,6 +128,58 @@ def _couche(id_couche: str, cfg: dict) -> inv_sig.Couche:
         raise HTTPException(status_code=422, detail=f"{service['libelle']} : {e}")
 
 
+# ---------------------------------------------------------------- PLAI (plans locaux d'aide à l'intervention)
+
+def _service_plai(cfg: dict) -> dict:
+    if not cfg.get("services_plai"):
+        raise HTTPException(status_code=404, detail="aucun PLAI déclaré (section « services_plai »)")
+    return cfg["services_plai"][0]
+
+
+@routeur.get("/plai/icones/{type_}.png")
+def plai_icone(type_: str, cfg: dict = Depends(_config_valide)):
+    """Pictogramme de la légende des PLAI (symbole de la carte), découpé à la lecture des plans."""
+    from . import plai as plai_sig
+    _service_plai(cfg)
+    if type_ not in plai_sig.TYPES:
+        raise HTTPException(status_code=404, detail=f"pictogramme inconnu : {type_}")
+    chemin = plai_sig.dossier_cache(cfg) / f"icone_{type_}.png"
+    if not chemin.is_file():
+        raise HTTPException(status_code=404, detail="pictogramme pas encore lu (lecture des PLAI en cours)")
+    return FileResponse(chemin, media_type="image/png", headers={"Cache-Control": "max-age=3600"})
+
+
+@routeur.get("/plai/pdf/{fichier}")
+def plai_pdf(fichier: str, cfg: dict = Depends(_config_valide)):
+    """Le PLAI d'une station, ouvert dans le navigateur (dossier en lecture seule ; nom contrôlé)."""
+    from . import plai as plai_sig
+    dossier = plai_sig.dossier_plans(_service_plai(cfg))
+    chemin = next((p for p in dossier.glob("*.pdf") if p.name == fichier), None) if dossier.is_dir() else None
+    if chemin is None:
+        raise HTTPException(status_code=404, detail=f"PLAI introuvable : {fichier}")
+    return FileResponse(chemin, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{chemin.name}"'})
+
+
+@routeur.get("/plai/controle")
+def plai_controle(cfg: dict = Depends(_config_valide)):
+    """Tableau de contrôle de la lecture des PLAI (une ligne par plan), en CSV pour Excel."""
+    import csv
+    import io
+    from . import plai as plai_sig
+    _service_plai(cfg)
+    chemin = plai_sig.dossier_cache(cfg) / "controle.json"
+    if not chemin.is_file():
+        raise HTTPException(status_code=404, detail="tableau pas encore produit (lecture des PLAI en cours)")
+    lignes = json.loads(chemin.read_text(encoding="utf-8"))
+    sortie = io.StringIO()
+    if lignes:
+        w = csv.DictWriter(sortie, fieldnames=list(lignes[0]), delimiter=cfg["export"]["separateur"])
+        w.writeheader()
+        w.writerows(lignes)
+    return Response(sortie.getvalue().encode(cfg["export"]["encodage"]), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="controle_plai.csv"'})
+
+
 @routeur.post("/services/{id_couche}/actualiser")
 def actualiser(id_couche: str, cfg: dict = Depends(_config_valide)):
     """Nouveau téléchargement d'une couche de service, même si son cache est à jour."""

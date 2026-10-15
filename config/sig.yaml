@@ -83,6 +83,15 @@ vues:
     batiments: true
     lidar: false
     camera: { centre_wgs84: [2.262, 48.7235], zoom: 15 }
+  - id: intervention
+    libelle: "Intervention"
+    description: "Plans Locaux d'Aide à l'Intervention (PLAI) : point RATP, point de rassemblement police / RATP, accès principal pompiers, accès aux quais, à la position IDFM de l'accès ; fiche : écart avec le plan, lien vers le PLAI."
+    couches: ["Plans d'intervention (PLAI)", "Accès des gares", "Gares et stations IDF"]
+    temps_reel: []
+    relief: false
+    batiments: true
+    lidar: false
+    camera: { centre_wgs84: [2.345, 48.866], zoom: 15 }
 
 carte:
   centre_wgs84: [2.35, 48.85]   # Île-de-France
@@ -645,4 +654,35 @@ services_geojson:
     url: "https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/fr-en-annuaire-education/exports/geojson?where=code_departement%20in%20(%22075%22,%22092%22,%22093%22,%22094%22)"
     cache_heures: 168
     attribution: "Éducation nationale"
+    visible: false
+
+# Plans Locaux d'Aide à l'Intervention (PLAI, RATP) : un PDF par station, lu par le serveur (lot 5, 2026-10-15).
+# Pictogrammes (point RATP, point de rassemblement, accès pompiers, accès aux quais) rattachés à l'accès du plan
+# le plus proche, placés à la position IDFM de cet accès ; écart avec l'endroit dessiné mesuré par calage du plan.
+# Clés : libelle, dossier (PDF, lecture seule), couche_gares et couche_acces (libellés des couches IDFM de référence) ;
+# facultatives : rayon_m (accès cherchés autour de la station, défaut 400), processus (lecture parallèle, défaut 4),
+# cache_heures, style (icones : champ, images, taille, decalages en pixels de l'image), visible.
+services_plai:
+  - libelle: "Plans d'intervention (PLAI)"
+    dossier: "donnees/Plan acces PG"
+    couche_gares: "Gares et stations IDF (IDFM)"
+    couche_acces: "Accès des gares (IDFM)"
+    rayon_m: 400
+    cache_heures: 24
+    champ_libelle: "libelle_type"
+    style:
+      couleur: "#0A0082"
+      icones:
+        champ: "type"
+        taille: 0.25                  # pictogrammes découpés à 4× (288 dpi) : ~28 px à l'écran
+        images:
+          ratp: "/api/sig/plai/icones/ratp.png"
+          rassemblement: "/api/sig/plai/icones/rassemblement.png"
+          pompiers: "/api/sig/plai/icones/pompiers.png"
+          quais: "/api/sig/plai/icones/quais.png"
+        decalages:                    # plusieurs pictogrammes au même accès : côte à côte, épingle au-dessus
+          ratp: [-120, 0]
+          pompiers: [0, 0]
+          rassemblement: [120, 0]
+          quais: [0, -150]
     visible: false

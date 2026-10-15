@@ -32,10 +32,46 @@ const RESULTAT = ['boolean', ['feature-state', 'resultat'], false];
 const OR = '#E8B400';
 const siResultat = (oui, non) => ['case', RESULTAT, oui, non];
 
+/** Calque des points en pictogrammes (PLAI) : image choisie par le champ « _icone », décalage par type pour que
+ *  plusieurs pictogrammes au même accès restent lisibles. Images chargées par `chargerIcones`. */
+function calquePictogrammes(c, src) {
+  const ic = c.style.icones;
+  const decalages = ['match', ['get', '_icone']];
+  for (const [type, d] of Object.entries(ic.decalages || {})) decalages.push(type, ['literal', d]);
+  decalages.push(['literal', [0, 0]]);
+  return { id: `sig-${c.id}-pt`, type: 'symbol', source: src, filter: FILTRES.pt,
+    layout: { 'icon-image': ['concat', `sig-icone-${c.id}-`, ['get', '_icone']], 'icon-size': ic.taille ?? 0.25,
+              'icon-allow-overlap': true, 'icon-ignore-placement': true,
+              'icon-offset': Object.keys(ic.decalages || {}).length ? decalages : ['literal', [0, 0]] },
+    paint: { 'icon-opacity': c.style.opacite ?? 1 } };
+}
+
+async function chargerIcones(carte, c) {
+  const ic = c.style.icones;
+  await Promise.all(Object.entries(ic.images || {}).map(async ([type, url]) => {
+    const nom = `sig-icone-${c.id}-${type}`;
+    if (carte.hasImage(nom)) return;
+    try {
+      const { data } = await carte.loadImage(url);
+      if (!carte.hasImage(nom)) carte.addImage(nom, data);
+    } catch (e) {
+      console.warn(`pictogramme ${type} indisponible (${url}) : ${e.message}`);
+    }
+  }));
+}
+
 function calques(c) {
   const s = c.style;
   const src = `sig-src-${c.id}`;
   const op = (base) => base ?? 0.9;
+  if (s.icones) {
+    return [
+      { id: `sig-${c.id}-fl`, type: 'fill', source: src, filter: FILTRES.fl, paint: { 'fill-color': s.couleur, 'fill-opacity': 0 } },
+      { id: `sig-${c.id}-ol`, type: 'line', source: src, filter: FILTRES.fl, paint: { 'line-color': s.couleur, 'line-opacity': 0 } },
+      { id: `sig-${c.id}-ln`, type: 'line', source: src, filter: FILTRES.ln, paint: { 'line-color': s.couleur, 'line-opacity': 0 } },
+      calquePictogrammes(c, src),
+    ];
+  }
   return [
     { id: `sig-${c.id}-fl`, type: 'fill', source: src, filter: FILTRES.fl,
       paint: { 'fill-color': siResultat(OR, s.couleur), 'fill-opacity': op(s.opacite) } },
@@ -67,7 +103,7 @@ export function origineService(s) {
 const degradee = (s) => s.source === 'cache_perime' || s.source === 'repli';
 
 const PROPRIETES_OPACITE = {
-  fill: ['fill-opacity'], line: ['line-opacity'], circle: ['circle-opacity', 'circle-stroke-opacity'],
+  fill: ['fill-opacity'], line: ['line-opacity'], circle: ['circle-opacity', 'circle-stroke-opacity'], symbol: ['icon-opacity'],
 };
 
 export class GestionnaireCouches {
@@ -102,10 +138,14 @@ export class GestionnaireCouches {
       this.etats.set(c.id, { couche: c, visible: c.visible, opacite: 1, charge: false, info: '' });
       this.ordre.push(c.id);
       this.carte.addSource(`sig-src-${c.id}`, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      if (c.style.icones) chargerIcones(this.carte, c);   // pictogrammes (PLAI), chargés en parallèle
       for (const calque of calques(c)) this.carte.addLayer(calque, 'sig-sel-fl');
       this._appliquerVisibilite(c.id);
       this._appliquerCoupe(c.id);
     }
+    // couches à pictogrammes (PLAI) au-dessus : repères ponctuels à cliquer, souvent posés sur un accès IDFM
+    const aIcones = (id) => (this.etats.get(id).couche.style.icones ? 1 : 0);
+    this.ordre.sort((a, b) => aIcones(b) - aIcones(a));
     this._rendre();
     // après l'inventaire : la liste des couches de la recherche doit être remplie
     this.panneaux.recherche.replaceChildren(this._blocRecherche());

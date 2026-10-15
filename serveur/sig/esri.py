@@ -391,15 +391,18 @@ class Connecteur:
     identifiant: Callable[[dict], str]
     telecharger: Callable[[dict, dict, httpx.Client], tuple]
     systeme_service: str              # origine du système quand la configuration n'en déclare pas
+    lent: bool = False                # premier chargement en arrière-plan (lecture de centaines de PLAI)
 
 
 def connecteurs() -> list[Connecteur]:
-    from . import flux   # import local : flux dépend de ce module (ErreurService)
+    from . import flux, plai   # import local : ces modules dépendent de celui-ci (ErreurService)
     return [
         Connecteur("services_esri", "Esri", "Service Esri", identifiant, telecharger, "service"),
         Connecteur("services_wfs", "WFS", "Service WFS", flux.identifiant_wfs, flux.telecharger_wfs, "demandé au service"),
         Connecteur("services_geojson", "GeoJSON", "GeoJSON (URL)", flux.identifiant_geojson, flux.telecharger_geojson,
                    "norme GeoJSON (WGS84)"),
+        Connecteur("services_plai", "PLAI", "Plans PLAI (PDF)", plai.identifiant, plai.telecharger,
+                   "Lambert 93 (accès IDFM)", lent=True),
     ]
 
 
@@ -432,6 +435,7 @@ def _couche_cache(cfg, service, id_, meta, rang, source, avert, connecteur: Conn
                                 + (f" sur {total}" if total is not None else "") + " (limite « max_objets »)")
     if meta.get("sans_geometrie"):
         c.avertissements.append(f"{meta['sans_geometrie']} objet(s) sans géométrie écarté(s)")
+    c.avertissements += list(meta.get("avertissements") or [])
     if meta.get("carreaux_en_echec"):
         n = len(meta["carreaux_en_echec"])
         c.avertissements.append(f"{n} carreau(x) sans réponse du service : couche incomplète "
@@ -490,7 +494,11 @@ def couche_service(cfg: dict, service: dict, rang: int, forcer: bool = False,
         return _couche_cache(cfg, service, id_, meta, rang, "actualisation",
                              [f"données du {date} : actualisation en cours en arrière-plan"], connecteur)
     if en_cours and not forcer:
-        raise inv_sig.AnomalieCouche("premier téléchargement en cours en arrière-plan")
+        raise inv_sig.AnomalieCouche("premier chargement en cours en arrière-plan : la couche apparaîtra à l'actualisation")
+    if meta is None and connecteur.lent and not forcer and not (echec and time.monotonic() - echec[0] < attente):
+        # connecteur lent (centaines de PLAI) : jamais d'attente de l'inventaire, même au premier chargement
+        _actualiser_en_arriere_plan(cfg, service, id_, connecteur, client)
+        raise inv_sig.AnomalieCouche("premier chargement en cours en arrière-plan : la couche apparaîtra à l'actualisation")
     if echec and not forcer and time.monotonic() - echec[0] < attente:
         message = echec[1]
     else:

@@ -149,11 +149,16 @@ def objets(couche: Couche, bbox: list[float] | None, seuil: int) -> dict:
 
     nom_geom = geo.geometry.name
     lib = couche.champ_libelle
+    # couche à pictogrammes (PLAI) : champ qui choisit l'icône de chaque objet
+    icone = ((couche.style or {}).get("icones") or {}).get("champ")
+    icone = icone if icone in geo.columns else None
     features = []
     for n, ligne in geo.iterrows():
         props = {"_n": int(n)}
         if lib:
             props["_libelle"] = valeur_json(ligne[lib])
+        if icone:
+            props["_icone"] = valeur_json(ligne[icone])
         features.append({"type": "Feature", "id": int(n), "geometry": _geometrie_json(ligne[nom_geom], 7),
                          "properties": props})
     return {

@@ -153,6 +153,26 @@ def _controler(cfg: dict, chemin: Path) -> dict:
             raise erreur(f"« {section} » doit être une liste")
         if liste:
             _controler_flux(cfg, section, liste, erreur)
+
+    plai = cfg.get("services_plai")
+    if plai is None:
+        cfg["services_plai"] = plai = []
+    if not isinstance(plai, list):
+        raise erreur("« services_plai » doit être une liste")
+    for i, s in enumerate(plai, 1):
+        nom = f"« services_plai » n° {i}"
+        if not isinstance(s, dict) or not all(isinstance(s.get(k), str) and s[k] for k in ("libelle", "dossier", "couche_gares", "couche_acces")):
+            raise erreur(f"{nom} : « libelle », « dossier » (PDF des PLAI), « couche_gares » et « couche_acces » "
+                         "(libellés des couches IDFM de référence) attendus")
+        if "rayon_m" in s and not (_nombre(s["rayon_m"], True) and s["rayon_m"] <= 2000):
+            raise erreur(f"{nom} : « rayon_m » doit être compris entre 0 et 2000")
+        if "processus" in s and not (isinstance(s["processus"], int) and 1 <= s["processus"] <= 8):
+            raise erreur(f"{nom} : « processus » doit être un entier de 1 à 8")
+        if "style" in s and not isinstance(s["style"], dict):
+            raise erreur(f"{nom} : « style » doit être un dictionnaire")
+        if not isinstance(cfg.get("esri"), dict) or not cfg["esri"].get("dossier_cache"):
+            raise erreur("section « esri » absente (son cache sert aussi aux PLAI)")
+        s["url"] = f"plai:{s['dossier']}"   # identifiant d'origine affiché (les autres services ont une URL)
     return cfg
 
 

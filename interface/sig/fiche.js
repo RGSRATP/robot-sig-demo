@@ -53,7 +53,13 @@ function tableau(valeurs) {
   for (const [k, v] of Object.entries(valeurs)) {
     const tr = table.insertRow();
     tr.insertCell().textContent = k;
-    tr.insertCell().textContent = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    const cellule = tr.insertCell();
+    if (typeof v === 'string' && v.startsWith('/api/sig/plai/pdf/')) {
+      // PLAI de la station : ouvert dans un nouvel onglet (document RATP servi par le démonstrateur)
+      cellule.append(el('a', { href: v, target: '_blank', rel: 'noopener', textContent: 'Ouvrir le PLAI (PDF)' }));
+    } else {
+      cellule.textContent = v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    }
   }
   return table;
 }

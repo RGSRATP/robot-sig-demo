@@ -13,3 +13,5 @@ pyproj==3.8.0
 geopandas==1.2.0
 pandas==3.0.6
 numpy==2.5.3
+# Lot 5 — lecture des plans PLAI (PDF vectoriels) : pdfplumber (licence MIT ; PyMuPDF écarté, licence AGPL)
+pdfplumber==0.11.10
