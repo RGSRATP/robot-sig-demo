@@ -141,6 +141,15 @@ def _controler(cfg: dict, chemin: Path) -> dict:
         raise erreur("« services_esri » doit être une liste")
     if services:
         _controler_esri(cfg, services, erreur)
+
+    for section in ("services_wfs", "services_geojson"):
+        liste = cfg.get(section)
+        if liste is None:
+            cfg[section] = liste = []
+        if not isinstance(liste, list):
+            raise erreur(f"« {section} » doit être une liste")
+        if liste:
+            _controler_flux(cfg, section, liste, erreur)
     return cfg
 
 
@@ -386,6 +395,48 @@ def _controler_esri(cfg: dict, services: list, erreur) -> None:
         id_ = identifiant(s)
         if id_ in vus:
             raise erreur(f"{nom} : même URL et même filtre que le service n° {vus[id_]}")
+        vus[id_] = i
+
+
+def _controler_flux(cfg: dict, section: str, services: list, erreur) -> None:
+    """Services WFS (« services_wfs ») et GeoJSON par URL (« services_geojson ») : cache commun aux services Esri."""
+    from .flux import MOTIF_URL, identifiant_geojson, identifiant_wfs  # import local : flux dépend de config
+
+    if not isinstance(cfg.get("esri"), dict) or not cfg["esri"].get("dossier_cache"):
+        raise erreur(f"section « esri » absente (son cache sert aussi à « {section} »)")
+    wfs = section == "services_wfs"
+    vus = {}
+    for i, s in enumerate(services, 1):
+        if not isinstance(s, dict) or not isinstance(s.get("libelle"), str) or not s["libelle"]:
+            raise erreur(f"« {section} » n° {i} : clé « libelle » absente")
+        nom = f"« {section} » n° {i} ({s['libelle']})"
+        if not isinstance(s.get("url"), str) or not MOTIF_URL.match(s["url"]):
+            raise erreur(f"{nom} : « url » doit être une adresse http(s)")
+        if any(m in s["url"].lower() for m in ("token=", "apikey=", "api_key=", "password=")) or any(
+                k in s for k in ("token", "jeton", "mot_de_passe", "password", "apikey")):
+            raise erreur(f"{nom} : aucun jeton ni mot de passe dans la configuration")
+        if wfs and (not isinstance(s.get("couche"), str) or not s["couche"]):
+            raise erreur(f"{nom} : « couche » absente (nom de la couche WFS, ex. « wfs_du:zone_urba »)")
+        e = s.get("emprise_wgs84")
+        if wfs and e is None:
+            raise erreur(f"{nom} : « emprise_wgs84 » obligatoire (les services WFS publics sont nationaux)")
+        nombres = isinstance(e, list) and len(e) == 4 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in e)
+        if e is not None and not (nombres and -180 <= e[0] < e[2] <= 180 and -90 <= e[1] < e[3] <= 90):
+            raise erreur(f"{nom} : « emprise_wgs84 » doit être [ouest, sud, est, nord] en degrés")
+        for cle in ("taille_page", "max_objets"):
+            if cle in s and not (isinstance(s[cle], int) and not isinstance(s[cle], bool) and s[cle] > 0):
+                raise erreur(f"{nom} : « {cle} » doit être un entier strictement positif")
+        for cle in ("cache_heures", "max_mo"):
+            if cle in s and not _nombre(s[cle], cle == "max_mo"):
+                raise erreur(f"{nom} : « {cle} » doit être un nombre positif")
+        if "style" in s and not isinstance(s["style"], dict):
+            raise erreur(f"{nom} : « style » doit être un dictionnaire")
+        for cle in ("export", "export_couche", "systeme", "champ_libelle", "attribution"):
+            if cle in s and not isinstance(s[cle], str):
+                raise erreur(f"{nom} : « {cle} » doit être un texte")
+        id_ = identifiant_wfs(s) if wfs else identifiant_geojson(s)
+        if id_ in vus:
+            raise erreur(f"{nom} : même source et même emprise que le n° {vus[id_]}")
         vus[id_] = i
 
 

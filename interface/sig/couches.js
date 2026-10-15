@@ -329,7 +329,7 @@ export class GestionnaireCouches {
     const pastille = el('span', { className: `sig-pastille sig-pastille--${c.geometrie}` });
     pastille.style.setProperty('--c', c.style.couleur);
     const nom = el('span', { className: 'sig-couche__nom', textContent: c.libelle,
-      title: c.service ? `${c.service.url}\nfiltre : ${c.service.where}` : `${c.fichier}${c.couche ? ' › ' + c.couche : ''}` });
+      title: c.service ? `${c.service.url}${c.service.couche ? `\ncouche : ${c.service.couche}` : ''}\nfiltre : ${c.service.where}` : `${c.fichier}${c.couche ? ' › ' + c.couche : ''}` });
     const alerte = c.avertissements.length
       ? el('span', { className: 'sig-avert', textContent: '⚠', title: c.avertissements.join('\n') }) : null;
 
@@ -372,7 +372,7 @@ export class GestionnaireCouches {
     this.surAnomalies(inv.anomalies.length);
   }
 
-  // ------------------------------------------------------------ services Esri
+  // ------------------------------------------------------------ services distants (Esri, WFS, GeoJSON)
 
   async actualiser(id) {
     const etat = this.etats.get(id);
@@ -409,7 +409,7 @@ export class GestionnaireCouches {
     for (const c of services) {
       const b = bouton('actualiser', 'Actualiser depuis le service', () => this.actualiser(c.id));
       ul.append(el('li', { title: c.service.url },
-        el('strong', { textContent: c.libelle }), ' ', b,
+        el('strong', { textContent: c.libelle }), ' ', el('span', { className: 'sig-info', textContent: `(${c.service.type || 'Esri'})` }), ' ', b,
         el('div', { className: degradee(c.service) ? 'sig-info sig-alerte' : 'sig-info', textContent: origineService(c.service) }),
         c.service.copyright ? el('div', { className: 'sig-info', textContent: `Source : ${c.service.copyright}` }) : null));
     }
@@ -418,7 +418,7 @@ export class GestionnaireCouches {
         el('div', { className: 'sig-erreur', textContent: `non affichée : ${a.message}` })));
     }
     return el('section', { className: 'sig-section' },
-      el('h3', { textContent: `Services Esri (${services.length}/${inv.nb_services})` }), ul);
+      el('h3', { textContent: `Services distants (${services.length}/${inv.nb_services})` }), ul);
   }
 
   _blocRecherche() {

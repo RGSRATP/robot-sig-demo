@@ -78,7 +78,7 @@ function montrer(noeuds, fermeture) {
 export function afficherFiche(fiche, couche, fermeture, complements = []) {
   if (!panneau) return;
   const source = couche.service
-    ? `${couche.libelle} — service Esri, données du ${dateCourte(couche.service.date_maj)}`
+    ? `${couche.libelle} — service ${couche.service.type || 'Esri'}, données du ${dateCourte(couche.service.date_maj)}`
     : couche.libelle;
   if (fiche.erreur) {
     montrer([entete('Objet indisponible', source, 'Objet SIG'), el('p', { className: 'sig-erreur', textContent: fiche.erreur })], fermeture);

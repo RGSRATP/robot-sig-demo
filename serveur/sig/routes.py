@@ -97,7 +97,7 @@ def _inventaire_complet(cfg: dict, forcer: str | None = None) -> dict:
         **inv,
         "couches": inv["couches"] + [c.publique() for c in couches],
         "anomalies": inv["anomalies"] + anomalies,
-        "nb_services": len(cfg["services_esri"]),
+        "nb_services": len(esri_sig.services_declares(cfg)),
         "systeme_attendu": cfg["carte"].get("systeme_donnees_attendu"),
         "seuil_objets_filtre_emprise": cfg["chargement"]["seuil_objets_filtre_emprise"],
     }
@@ -109,19 +109,21 @@ def couches(cfg: dict = Depends(_config_valide)):
     return _inventaire_complet(cfg)
 
 
-def _service(id_couche: str, cfg: dict) -> dict | None:
-    return next((s for s in cfg["services_esri"] if esri_sig.identifiant(s) == id_couche), None)
+def _service(id_couche: str, cfg: dict):
+    """(service, connecteur) d'une couche de service distant (Esri, WFS, GeoJSON), sinon None."""
+    return esri_sig.trouver_service(cfg, id_couche)
 
 
 def _couche(id_couche: str, cfg: dict) -> inv_sig.Couche:
     couche = inv_sig.inventaire(cfg).couche(id_couche)
     if couche is not None:
         return couche
-    service = _service(id_couche, cfg)
-    if service is None:
+    trouve = _service(id_couche, cfg)
+    if trouve is None:
         raise HTTPException(status_code=404, detail=f"couche inconnue : {id_couche}")
+    service, connecteur = trouve
     try:
-        return esri_sig.couche_service(cfg, service, rang=0)
+        return esri_sig.couche_service(cfg, service, rang=0, connecteur=connecteur)
     except inv_sig.AnomalieCouche as e:
         raise HTTPException(status_code=422, detail=f"{service['libelle']} : {e}")
 

@@ -11,6 +11,8 @@ envoyé dans le corps des requêtes (jamais dans l'URL) et n'apparaît ni dans l
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from typing import Callable
 import math
 import os
 import re
@@ -322,27 +324,70 @@ def reinitialiser() -> None:
         _echecs.clear()
 
 
-def _couche_cache(cfg, service, id_, meta, rang, source, avert) -> inv_sig.Couche:
+# ---------------------------------------------------------------- types de services
+
+@dataclass(frozen=True)
+class Connecteur:
+    """Un type de service distant : section de configuration, identifiant, téléchargement et libellés.
+    Le cache, le repli et la couche produite sont communs (ce module)."""
+    section: str                      # liste de config/sig.yaml
+    type: str                         # « Esri », « WFS », « GeoJSON »
+    format: str                       # format affiché de la couche
+    identifiant: Callable[[dict], str]
+    telecharger: Callable[[dict, dict, httpx.Client], tuple]
+    systeme_service: str              # origine du système quand la configuration n'en déclare pas
+
+
+def connecteurs() -> list[Connecteur]:
+    from . import flux   # import local : flux dépend de ce module (ErreurService)
+    return [
+        Connecteur("services_esri", "Esri", "Service Esri", identifiant, telecharger, "service"),
+        Connecteur("services_wfs", "WFS", "Service WFS", flux.identifiant_wfs, flux.telecharger_wfs, "demandé au service"),
+        Connecteur("services_geojson", "GeoJSON", "GeoJSON (URL)", flux.identifiant_geojson, flux.telecharger_geojson,
+                   "norme GeoJSON (WGS84)"),
+    ]
+
+
+def services_declares(cfg: dict) -> list[tuple[dict, Connecteur]]:
+    """Tous les services distants déclarés, avec leur connecteur, dans l'ordre de la configuration."""
+    return [(s, c) for c in connecteurs() for s in cfg.get(c.section) or []]
+
+
+def trouver_service(cfg: dict, id_couche: str) -> tuple[dict, Connecteur] | None:
+    return next(((s, c) for s, c in services_declares(cfg) if c.identifiant(s) == id_couche), None)
+
+
+def _connecteur_esri() -> Connecteur:
+    return connecteurs()[0]
+
+
+def _couche_cache(cfg, service, id_, meta, rang, source, avert, connecteur: Connecteur | None = None) -> inv_sig.Couche:
+    connecteur = connecteur or _connecteur_esri()
     gpkg, _ = _fichiers_cache(cfg, id_)
     decl = {k: v for k, v in service.items() if k in ("style", "visible", "champ_libelle")}
     c = inv_sig._couche(cfg, dossier_cache(cfg), gpkg, COUCHE_CACHE, decl, rang)
     c.id, c.couche, c.fichier = id_, None, service["url"]
     c.libelle = service["libelle"]
-    c.format = "Service Esri"
-    c.systeme_source = "service" if not service.get("systeme") else "configuration"
+    c.format = connecteur.format
+    c.systeme_source = connecteur.systeme_service if not service.get("systeme") else "configuration"
     c.avertissements = avert + c.avertissements
     if meta.get("tronque"):
-        c.avertissements.append(
-            f"{meta['nb_objets']} objets téléchargés sur {meta['nb_objets_service']} (limite « max_objets »)")
+        total = meta.get("nb_objets_service")
+        c.avertissements.append(f"{meta['nb_objets']} objets téléchargés"
+                                + (f" sur {total}" if total is not None else "") + " (limite « max_objets »)")
+    if meta.get("sans_geometrie"):
+        c.avertissements.append(f"{meta['sans_geometrie']} objet(s) sans géométrie écarté(s)")
     c.service = {
-        "url": service["url"], "where": meta.get("where"), "source": source,
+        "type": connecteur.type, "url": service["url"], "couche": service.get("couche"),
+        "where": meta.get("where"), "source": source,
         "date_maj": meta.get("date_maj"), "copyright": meta.get("copyright", ""),
         "nb_objets_service": meta.get("nb_objets_service"), "pagination": meta.get("pagination"),
     }
     return c
 
 
-def _couche_repli(cfg, service, id_, rang, avert) -> inv_sig.Couche:
+def _couche_repli(cfg, service, id_, rang, avert, connecteur: Connecteur | None = None) -> inv_sig.Couche:
+    connecteur = connecteur or _connecteur_esri()
     export = service["export"]
     chemin = dossier_exports(cfg) / export
     if not chemin.is_file():
@@ -353,25 +398,27 @@ def _couche_repli(cfg, service, id_, rang, avert) -> inv_sig.Couche:
     c = inv_sig._couche(cfg, dossier_exports(cfg), chemin, service.get("export_couche"), decl, rang)
     c.id = id_
     c.libelle = service["libelle"]
-    c.format = f"Service Esri (export {c.format})"
+    c.format = f"{connecteur.format} (export {c.format})"
     c.avertissements = avert + c.avertissements
-    c.service = {"url": service["url"], "where": service.get("where") or "1=1", "source": "repli",
+    c.service = {"type": connecteur.type, "url": service["url"], "couche": service.get("couche"),
+                 "where": service.get("where") or "1=1", "source": "repli",
                  "date_maj": datetime.fromtimestamp(chemin.stat().st_mtime).isoformat(timespec="seconds"),
                  "export": export}
     return c
 
 
 def couche_service(cfg: dict, service: dict, rang: int, forcer: bool = False,
-                   client: httpx.Client | None = None) -> inv_sig.Couche:
+                   client: httpx.Client | None = None, connecteur: Connecteur | None = None) -> inv_sig.Couche:
     """Couche d'un service : cache à jour, sinon téléchargement, sinon cache ancien, sinon export de repli.
 
     Lève AnomalieCouche si rien n'est disponible.
     """
-    id_ = identifiant(service)
+    connecteur = connecteur or _connecteur_esri()
+    id_ = connecteur.identifiant(service)
     meta = lire_meta(cfg, id_)
     duree = float(service.get("cache_heures", cfg["esri"]["cache_heures_defaut"]))
     if meta and not forcer and _age_heures(meta) < duree:
-        return _couche_cache(cfg, service, id_, meta, rang, "cache", [])
+        return _couche_cache(cfg, service, id_, meta, rang, "cache", [], connecteur)
 
     attente = float(cfg["esri"]["nouvel_essai_minutes"]) * 60
     with _verrou:
@@ -383,14 +430,14 @@ def couche_service(cfg: dict, service: dict, rang: int, forcer: bool = False,
             propre = client is None
             client = client or fabrique_client(cfg)
             try:
-                gdf, nouvelle = telecharger(service, cfg, client)
+                gdf, nouvelle = connecteur.telecharger(service, cfg, client)
             finally:
                 if propre:
                     client.close()
             ecrire_cache(cfg, id_, gdf, nouvelle)
             with _verrou:
                 _echecs.pop(id_, None)
-            return _couche_cache(cfg, service, id_, nouvelle, rang, "service", [])
+            return _couche_cache(cfg, service, id_, nouvelle, rang, "service", [], connecteur)
         except (ErreurService, inv_sig.AnomalieCouche) as e:
             message = str(e)
         except Exception as e:  # garde-fou : un service ne doit jamais interrompre l'inventaire
@@ -401,21 +448,21 @@ def couche_service(cfg: dict, service: dict, rang: int, forcer: bool = False,
     if meta:
         date = meta.get("date_maj", "?").replace("T", " à ")
         return _couche_cache(cfg, service, id_, meta, rang, "cache_perime",
-                             [f"service indisponible ({message}) : données du cache du {date}"])
+                             [f"service indisponible ({message}) : données du cache du {date}"], connecteur)
     if service.get("export"):
         return _couche_repli(cfg, service, id_, rang,
-                             [f"service indisponible ({message}) : repli sur l'export {service['export']}"])
+                             [f"service indisponible ({message}) : repli sur l'export {service['export']}"], connecteur)
     raise inv_sig.AnomalieCouche(f"{message} ; ni cache local ni export de repli (clé « export »)")
 
 
 def couches_services(cfg: dict, rang0: int = 0, client: httpx.Client | None = None,
                      forcer: str | None = None) -> tuple[list[inv_sig.Couche], list[dict]]:
-    """Couches des services déclarés et anomalies (une anomalie n'empêche pas les autres services)."""
+    """Couches des services déclarés (Esri, WFS, GeoJSON) et anomalies (une anomalie n'empêche pas les autres)."""
     couches, anomalies = [], []
-    for service in cfg.get("services_esri") or []:
-        id_ = identifiant(service)
+    for service, connecteur in services_declares(cfg):
+        id_ = connecteur.identifiant(service)
         try:
-            couches.append(couche_service(cfg, service, rang0 + len(couches), forcer == id_, client))
+            couches.append(couche_service(cfg, service, rang0 + len(couches), forcer == id_, client, connecteur))
         except inv_sig.AnomalieCouche as e:
             anomalies.append({"fichier": service["url"], "couche": service["libelle"], "message": str(e), "service": True})
         except Exception as e:
