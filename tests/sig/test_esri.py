@@ -194,18 +194,26 @@ def _vieillir_cache(cfg, service, heures):
     fiche.write_text(json.dumps(meta), encoding="utf-8")
 
 
-def test_cache_expire_recharge(cfg_test, gares, faux):
+def test_cache_expire_servi_tout_de_suite_et_actualise_en_arriere_plan(cfg_test, gares, faux):
+    """Une couche longue à télécharger (bande le long du GPE : 20 min) ne fait jamais attendre l'inventaire."""
     esri.couche_service(cfg_test, gares, 0)
     _vieillir_cache(cfg_test, gares, 25)
     n = len(faux.requetes)
-    assert esri.couche_service(cfg_test, gares, 0).service["source"] == "service"
+    c = esri.couche_service(cfg_test, gares, 0)
+    assert c.service["source"] == "actualisation" and c.nb_objets == 5
+    assert "actualisation en cours" in c.avertissements[0]
+    esri.attendre_actualisations()
     assert len(faux.requetes) > n
+    assert not esri._echecs, esri._echecs
+    assert esri.couche_service(cfg_test, gares, 0).service["source"] == "cache"   # cache rafraîchi
 
 
 def test_service_en_panne_cache_perime_utilise(cfg_test, gares, faux):
     esri.couche_service(cfg_test, gares, 0)
     _vieillir_cache(cfg_test, gares, 48)
     faux.panne.add("Gares")
+    assert esri.couche_service(cfg_test, gares, 0).service["source"] == "actualisation"
+    esri.attendre_actualisations()   # l'actualisation échoue : le cache ancien est alors signalé
     c = esri.couche_service(cfg_test, gares, 0)
     assert c.service["source"] == "cache_perime" and c.nb_objets == 5
     assert "service indisponible" in c.avertissements[0] and "cache du" in c.avertissements[0]

@@ -21,6 +21,7 @@ import geopandas as gpd
 import httpx
 from pyproj import Transformer
 from shapely.geometry import box, shape
+from shapely.prepared import prep
 
 from . import inventaire as inv_sig
 from . import reseau
@@ -34,6 +35,9 @@ MAX_MO_GEOJSON = 50
 
 
 def _emprise_texte(service: dict) -> str:
+    if service.get("le_long_de"):
+        d = service["le_long_de"]
+        return f"le long de {d['couche']} ({d['tampon_m']:g} m)"
     e = service.get("emprise_wgs84")
     return ",".join(f"{v:g}" for v in e) if e else ""
 
@@ -115,25 +119,49 @@ def _crs(service: dict, defaut: str):
         raise ErreurService(f"système « {systeme} » inconnu") from None
 
 
+# ---------------------------------------------------------------- bande le long d'une couche (lignes du GPE…)
+
+PAS_CARREAUX_M = 2000
+
+
+def zone_le_long_de(decl: dict, cfg: dict):
+    """Bande de `tampon_m` mètres autour de la couche fichier de référence (libellé exact), en Lambert 93,
+    et carreaux de `pas_m` mètres qui la recouvrent (emprises WGS84 [ouest, sud, est, nord] à interroger)."""
+    from . import objets   # import local : objets dépend de l'inventaire, comme ce module
+    couches = [c for c in inv_sig.inventaire(cfg).couches if c.libelle == decl["couche"]]
+    if not couches:
+        raise ErreurService(f"couche de référence « {decl['couche']} » introuvable parmi les couches fichiers (libellé exact)")
+    ref, _ = objets._lire(couches[0])
+    if ref.crs is None:
+        raise ErreurService(f"couche de référence « {decl['couche']} » sans système de coordonnées")
+    zone = ref.to_crs(2154).buffer(float(decl["tampon_m"])).union_all()
+    pas = float(decl.get("pas_m") or PAS_CARREAUX_M)
+    x0, y0, x1, y1 = zone.bounds
+    vers_wgs84 = Transformer.from_crs("EPSG:2154", "EPSG:4326", always_xy=True)
+    cases = []
+    y = y0
+    while y < y1:
+        x = x0
+        while x < x1:
+            carreau = box(x, y, x + pas, y + pas)
+            if carreau.intersects(zone):
+                lons, lats = vers_wgs84.transform([x, x + pas, x, x + pas], [y, y, y + pas, y + pas])
+                cases.append([min(lons), min(lats), max(lons), max(lats)])
+            x += pas
+        y += pas
+    return zone, cases
+
+
 # ---------------------------------------------------------------- WFS 2.0
 
-def telecharger_wfs(service: dict, cfg: dict, client: httpx.Client) -> tuple[gpd.GeoDataFrame, dict]:
-    debut = time.monotonic()
-    systeme = str(service.get("systeme") or SYSTEME_WFS_DEFAUT)
-    crs = _crs(service, SYSTEME_WFS_DEFAUT)
-    ouest, sud, est, nord = service["emprise_wgs84"]
-    taille = int(service.get("taille_page") or TAILLE_PAGE_WFS)
-    max_objets = int(service.get("max_objets") or cfg["esri"]["max_objets"])
-    base = {
-        "SERVICE": "WFS", "VERSION": "2.0.0", "REQUEST": "GetFeature", "TYPENAMES": service["couche"],
-        # MapServer (Sandre, BRGM, Géorisques) : « application/json; subtype=geojson », déclaré dans « format_sortie »
-        "OUTPUTFORMAT": service.get("format_sortie") or "application/json", "SRSNAME": systeme,
-        # WFS 2.0 : axes de EPSG:4326 dans l'ordre latitude, longitude
-        "BBOX": f"{sud},{ouest},{nord},{est},urn:ogc:def:crs:EPSG::4326",
-    }
+def _pages_wfs(client, service, base, emprise, taille, reste):
+    """Objets d'une emprise WGS84, page par page (au plus `reste`) ; nombre total annoncé par le service."""
+    ouest, sud, est, nord = emprise
+    # WFS 2.0 : axes de EPSG:4326 dans l'ordre latitude, longitude
+    base = {**base, "BBOX": f"{sud},{ouest},{nord},{est},urn:ogc:def:crs:EPSG::4326"}
     features, total, decalage = [], None, 0
-    while len(features) < max_objets:
-        n_demande = min(taille, max_objets - len(features))
+    while len(features) < reste:
+        n_demande = min(taille, reste - len(features))
         params = {**base, "COUNT": n_demande}
         # Décalage seulement à partir de la 2e page : GeoServer (Airparif) refuse un décalage sans ordre de tri
         # quand la couche n'a pas de clé primaire ; « tri » (SORTBY) le fournit pour les couches à plusieurs pages.
@@ -150,18 +178,80 @@ def telecharger_wfs(service: dict, cfg: dict, client: httpx.Client) -> tuple[gpd
         decalage += len(lot)
         if len(lot) < n_demande or (total is not None and decalage >= total):
             break
+    return features, total
+
+
+def _cle_objet(f: dict) -> str:
+    """Identité d'un objet renvoyé par plusieurs carreaux : identifiant WFS, sinon contenu complet."""
+    return str(f["id"]) if f.get("id") is not None else json.dumps([f.get("geometry"), f.get("properties")], sort_keys=True)
+
+
+def telecharger_wfs(service: dict, cfg: dict, client: httpx.Client) -> tuple[gpd.GeoDataFrame, dict]:
+    debut = time.monotonic()
+    systeme = str(service.get("systeme") or SYSTEME_WFS_DEFAUT)
+    crs = _crs(service, SYSTEME_WFS_DEFAUT)
+    taille = int(service.get("taille_page") or TAILLE_PAGE_WFS)
+    max_objets = int(service.get("max_objets") or cfg["esri"]["max_objets"])
+    base = {
+        "SERVICE": "WFS", "VERSION": "2.0.0", "REQUEST": "GetFeature", "TYPENAMES": service["couche"],
+        # MapServer (Sandre, BRGM, Géorisques) : « application/json; subtype=geojson », déclaré dans « format_sortie »
+        "OUTPUTFORMAT": service.get("format_sortie") or "application/json", "SRSNAME": systeme,
+    }
+    # Bande le long d'une couche : interrogée carreau par carreau (le service n'accepte qu'un rectangle),
+    # objets dédoublonnés puis limités à la bande ; sinon une seule emprise rectangulaire.
+    zone = None
+    if service.get("le_long_de"):
+        zone, emprises = zone_le_long_de(service["le_long_de"], cfg)
+        # Bande dans le système demandé au service, préparée : tri des objets carreau par carreau, avant tout comptage
+        bande = prep(gpd.GeoSeries([zone], crs="EPSG:2154").to_crs(crs).iloc[0])
+    else:
+        emprises = [service["emprise_wgs84"]]
+    vus, features, total, hors_bande, echecs = set(), [], None, 0, []
+    for i, emprise in enumerate(emprises):
+        try:
+            lot, total_emprise = _pages_wfs(client, service, base, emprise, taille,
+                                            max_objets - len(features) + 1 if zone is None else 10 * max_objets)
+        except ErreurService as e:
+            if zone is None or len(echecs) >= max(3, len(emprises) // 10):
+                raise   # une seule emprise, ou trop de carreaux en échec : la couche n'est pas fiable
+            echecs.append(f"carreau {i + 1} ({e})")   # ne jamais bloquer : carreau signalé, les autres continuent
+            continue
+        if len(emprises) == 1:
+            total = total_emprise
+        for f in lot:
+            cle = _cle_objet(f)
+            if cle in vus:
+                continue
+            vus.add(cle)
+            if zone is not None:
+                try:
+                    dedans = f.get("geometry") is not None and bande.intersects(shape(f["geometry"]))
+                except Exception:
+                    dedans = False
+                if not dedans:
+                    hors_bande += 1
+                    continue
+            features.append(f)
+        if len(features) > max_objets:
+            break
+    tronque = len(features) > max_objets or (total is not None and len(features) < total)
+    features = features[:max_objets]
 
     gdf, ecartes = _vers_gdf(features, crs)
-    tronque = (total is not None and len(features) < total) or (total is None and len(features) >= max_objets)
     meta = {
-        "url": service["url"], "couche": service["couche"], "where": f"emprise {_emprise_texte(service)}",
+        "url": service["url"], "couche": service["couche"],
+        "where": (f"{_emprise_texte(service)}, {len(emprises)} carreaux" if zone is not None
+                  else f"emprise {_emprise_texte(service)}"),
+        "hors_bande_ecartes": hors_bande,
+        "carreaux_en_echec": echecs,
         "copyright": service.get("attribution", ""), "date_maj": datetime.now().isoformat(timespec="seconds"),
         "nb_objets": len(gdf), "nb_objets_service": total, "sans_geometrie": ecartes, "tronque": tronque,
         "max_objets": max_objets, "taille_page": taille, "pagination": "decalage",
         "duree_secondes": round(time.monotonic() - debut, 1),
     }
     if gdf.empty:
-        raise ErreurService("aucun objet dans l'emprise déclarée (« emprise_wgs84 » ou nom de couche à vérifier)")
+        raise ErreurService("aucun objet dans l'emprise ou la bande déclarée (« emprise_wgs84 », « le_long_de » "
+                            "ou nom de couche à vérifier)")
     return gdf, meta
 
 

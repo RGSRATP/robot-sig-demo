@@ -76,8 +76,8 @@ vues:
     camera: { centre_wgs84: [2.35, 48.85], zoom: 11 }
   - id: reseaux
     libelle: "Réseaux et urbanisme"
-    description: "Réseaux de gaz (NaTran, GRDF), zonage du PLU, servitudes d'utilité publique, parcelles cadastrales (Massy, Champigny), chantiers à Paris."
-    couches: ["Réseau de transport de gaz", "Réseau GRDF", "Zonage du PLU", "Servitudes", "Parcelles", "Chantiers", "Travaux perturbants"]
+    description: "Réseaux de gaz (NaTran, GRDF), zonage du PLU et servitudes d'utilité publique (500 m de part et d'autre des lignes du GPE), parcelles cadastrales (100 m), chantiers à Paris."
+    couches: ["Réseau de transport de gaz", "Réseau GRDF", "Zonage du PLU", "Servitudes", "Parcelles", "Chantiers", "Travaux perturbants", "Lignes du GPE"]
     temps_reel: []
     relief: false
     batiments: true
@@ -410,46 +410,27 @@ services_wfs:
     cache_heures: 168
     attribution: "IGN BD TOPO"
     visible: false
-  - libelle: "Parcelles cadastrales – Massy"   # catalogue n° 6
+  # Couches denses : bande le long des lignes du GPE (couche fichier de référence), interrogée par carreaux.
+  - libelle: "Parcelles cadastrales (bande GPE 100 m)"   # catalogue n° 6 ; ~47 000 parcelles, ~4 min
     url: "https://data.geopf.fr/wfs/ows"
     couche: "CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle"
-    emprise_wgs84: [2.235, 48.71, 2.29, 48.735]
+    le_long_de: { couche: "Export__Lignes du GPE", tampon_m: 100, pas_m: 500 }
     cache_heures: 168
     attribution: "IGN Parcellaire Express"
     visible: false
-  - libelle: "Parcelles cadastrales – Champigny"   # catalogue n° 6
-    url: "https://data.geopf.fr/wfs/ows"
-    couche: "CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle"
-    emprise_wgs84: [2.49, 48.8, 2.55, 48.83]
-    cache_heures: 168
-    attribution: "IGN Parcellaire Express"
-    visible: false
-  - libelle: "Zonage du PLU – Massy"   # catalogue n° 41
+  - libelle: "Zonage du PLU (bande GPE 500 m)"   # catalogue n° 41 ; ~4 000 zones, ~1 min 30
     url: "https://data.geopf.fr/wfs/ows"
     couche: "wfs_du:zone_urba"
-    emprise_wgs84: [2.235, 48.71, 2.29, 48.735]
+    le_long_de: { couche: "Export__Lignes du GPE", tampon_m: 500 }
     cache_heures: 168
     attribution: "Géoportail de l'Urbanisme"
     visible: false
-  - libelle: "Zonage du PLU – Champigny"   # catalogue n° 41
-    url: "https://data.geopf.fr/wfs/ows"
-    couche: "wfs_du:zone_urba"
-    emprise_wgs84: [2.49, 48.8, 2.55, 48.83]
-    cache_heures: 168
-    attribution: "Géoportail de l'Urbanisme"
-    visible: false
-  - libelle: "Servitudes d'utilité publique – Massy"   # catalogue n° 41
+  - libelle: "Servitudes d'utilité publique (bande GPE 500 m)"   # catalogue n° 41 ; ~2 600 servitudes, ~21 min
     url: "https://data.geopf.fr/wfs/ows"
     couche: "wfs_sup:assiette_sup_s"
-    emprise_wgs84: [2.235, 48.71, 2.29, 48.735]
-    cache_heures: 168
-    attribution: "Géoportail de l'Urbanisme"
-    visible: false
-  - libelle: "Servitudes d'utilité publique – Champigny"   # catalogue n° 41
-    url: "https://data.geopf.fr/wfs/ows"
-    couche: "wfs_sup:assiette_sup_s"
-    emprise_wgs84: [2.49, 48.8, 2.55, 48.83]
-    cache_heures: 168
+    le_long_de: { couche: "Export__Lignes du GPE", tampon_m: 500 }
+    taille_page: 50              # très grands polygones : petites pages pour rester sous le délai du service
+    cache_heures: 720            # 21 min de téléchargement : actualisé tous les 30 jours, en arrière-plan
     attribution: "Géoportail de l'Urbanisme"
     visible: false
   - libelle: "Cours d'eau (BD TOPAGE, Sandre)"   # catalogue n° 53

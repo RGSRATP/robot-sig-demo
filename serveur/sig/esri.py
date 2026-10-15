@@ -302,7 +302,17 @@ def ecrire_cache(cfg: dict, id_: str, gdf: gpd.GeoDataFrame, meta: dict) -> None
     if gdf.empty:
         raise ErreurService("le service n'a renvoyé aucun objet (filtre « where » à vérifier)")
     gdf.to_file(tmp, layer=COUCHE_CACHE, driver="GPKG", engine="pyogrio")
-    os.replace(tmp, gpkg)
+    # Windows refuse de remplacer un fichier en cours de lecture (inventaire, objets) : l'actualisation en
+    # arrière-plan réessaie quelques secondes plutôt que d'échouer.
+    for essai in range(20):
+        try:
+            os.replace(tmp, gpkg)
+            break
+        except PermissionError:
+            if essai == 19:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.25)
     fiche.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -317,11 +327,56 @@ def _age_heures(meta: dict) -> float:
 
 _verrou = threading.Lock()
 _echecs: dict[str, tuple[float, str]] = {}  # id -> (instant, message) du dernier échec de téléchargement
+_en_cours: set[str] = set()                  # couches en cours d'actualisation en arrière-plan
+_fils: list[threading.Thread] = []
 
 
 def reinitialiser() -> None:
+    attendre_actualisations()
     with _verrou:
         _echecs.clear()
+        _en_cours.clear()
+
+
+def attendre_actualisations(delai: float | None = None) -> None:
+    """Attend la fin des actualisations en arrière-plan (tests, arrêt du serveur)."""
+    for fil in list(_fils):
+        fil.join(delai)
+    _fils[:] = [f for f in _fils if f.is_alive()]
+
+
+def _actualiser_en_arriere_plan(cfg: dict, service: dict, id_: str, connecteur: Connecteur,
+                                client: httpx.Client | None) -> None:
+    """Téléchargement d'une couche au cache expiré, sans faire attendre l'inventaire (une couche le long du GPE
+    peut demander plus de 20 minutes) ; une seule actualisation à la fois par couche."""
+    with _verrou:
+        if id_ in _en_cours:
+            return
+        _en_cours.add(id_)
+
+    def travail():
+        try:
+            propre = client is None
+            c = client or fabrique_client(cfg)
+            try:
+                gdf, nouvelle = connecteur.telecharger(service, cfg, c)
+            finally:
+                if propre:
+                    c.close()
+            ecrire_cache(cfg, id_, gdf, nouvelle)
+            with _verrou:
+                _echecs.pop(id_, None)
+        except Exception as e:   # garde-fou : jamais d'exception perdue dans un fil
+            message = str(e) if isinstance(e, (ErreurService, inv_sig.AnomalieCouche)) else f"erreur inattendue ({type(e).__name__} : {e})"
+            with _verrou:
+                _echecs[id_] = (time.monotonic(), message)
+        finally:
+            with _verrou:
+                _en_cours.discard(id_)
+
+    fil = threading.Thread(target=travail, name=f"actualisation-{id_}", daemon=True)
+    _fils.append(fil)
+    fil.start()
 
 
 # ---------------------------------------------------------------- types de services
@@ -377,6 +432,10 @@ def _couche_cache(cfg, service, id_, meta, rang, source, avert, connecteur: Conn
                                 + (f" sur {total}" if total is not None else "") + " (limite « max_objets »)")
     if meta.get("sans_geometrie"):
         c.avertissements.append(f"{meta['sans_geometrie']} objet(s) sans géométrie écarté(s)")
+    if meta.get("carreaux_en_echec"):
+        n = len(meta["carreaux_en_echec"])
+        c.avertissements.append(f"{n} carreau(x) sans réponse du service : couche incomplète "
+                                f"(« Actualiser » pour réessayer) — {'; '.join(meta['carreaux_en_echec'][:3])}")
     c.service = {
         "type": connecteur.type, "url": service["url"], "couche": service.get("couche"),
         "where": meta.get("where"), "source": source,
@@ -423,6 +482,15 @@ def couche_service(cfg: dict, service: dict, rang: int, forcer: bool = False,
     attente = float(cfg["esri"]["nouvel_essai_minutes"]) * 60
     with _verrou:
         echec = _echecs.get(id_)
+        en_cours = id_ in _en_cours
+    # Cache expiré : servi tout de suite, actualisé en arrière-plan (sauf échec récent : cache périmé signalé)
+    if meta and not forcer and not (echec and time.monotonic() - echec[0] < attente):
+        _actualiser_en_arriere_plan(cfg, service, id_, connecteur, client)
+        date = meta.get("date_maj", "?").replace("T", " à ")
+        return _couche_cache(cfg, service, id_, meta, rang, "actualisation",
+                             [f"données du {date} : actualisation en cours en arrière-plan"], connecteur)
+    if en_cours and not forcer:
+        raise inv_sig.AnomalieCouche("premier téléchargement en cours en arrière-plan")
     if echec and not forcer and time.monotonic() - echec[0] < attente:
         message = echec[1]
     else:

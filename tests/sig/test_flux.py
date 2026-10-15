@@ -74,6 +74,56 @@ def test_wfs_rien_dans_l_emprise(cfg_test, monkeypatch):
         _couche(cfg_test, _wfs(), "WFS", ff.FauxFlux())
 
 
+# ---------------------------------------------------------------- bande le long d'une couche (lignes du GPE)
+
+def test_zone_le_long_de_carreaux_couvrant_la_bande(cfg_test):
+    from shapely.geometry import box
+    zone, cases = flux.zone_le_long_de({"couche": "idfm_metro_l93", "tampon_m": 300, "pas_m": 2000}, cfg_test)
+    assert 280e6 > zone.area > 10e6                          # bande de 600 m autour du métro, en m² (Lambert 93)
+    assert 10 < len(cases) < 200
+    assert all(c[0] < c[2] and c[1] < c[3] and 2.0 < c[0] < 2.8 and 48.6 < c[1] < 49.1 for c in cases)
+
+
+def test_zone_le_long_de_couche_inconnue(cfg_test):
+    with pytest.raises(esri.ErreurService, match="introuvable"):
+        flux.zone_le_long_de({"couche": "Lignes inexistantes", "tampon_m": 500}, cfg_test)
+
+
+def test_wfs_le_long_de_carreaux_dedoublonnes_puis_limites_a_la_bande(cfg_test, monkeypatch):
+    """Chaque carreau renvoie les mêmes objets (faux serveur sans filtre) : dédoublonnés, puis seuls ceux qui
+    touchent la bande sont gardés."""
+    from shapely.geometry import box
+    bande = box(645900, 6848900, 646250, 6849200)            # couvre les zonages U0 et U1
+    monkeypatch.setattr(flux, "zone_le_long_de", lambda decl, cfg: (bande, [[2.26, 48.70, 2.27, 48.71], [2.27, 48.70, 2.28, 48.71]]))
+    serveur = ff.FauxFlux()
+    service = {k: v for k, v in _wfs().items() if k != "emprise_wgs84"} | {"le_long_de": {"couche": "x", "tampon_m": 500}}
+    c = _couche(cfg_test, service, "WFS", serveur)
+    assert c.nb_objets == 2
+    assert len(serveur.requetes) == 2                        # un appel par carreau
+    assert "2 carreaux" in c.service["where"]
+
+
+def test_wfs_le_long_de_carreau_sans_reponse_signale_sans_bloquer(cfg_test, monkeypatch):
+    """Servitudes, 2026-10-15 : un carreau dépasse le délai du service ; les autres sont chargés, la couche est signalée."""
+    from shapely.geometry import box
+    monkeypatch.setattr(flux, "zone_le_long_de", lambda decl, cfg: (box(645900, 6848900, 646250, 6849200),
+                                                                   [[2.26, 48.70, 2.27, 48.71], [2.27, 48.70, 2.28, 48.71]]))
+    appels = {"n": 0}
+    origine = flux._pages_wfs
+
+    def premier_en_echec(*a, **k):
+        appels["n"] += 1
+        if appels["n"] == 1:
+            raise esri.ErreurService("service délai dépassé")
+        return origine(*a, **k)
+
+    monkeypatch.setattr(flux, "_pages_wfs", premier_en_echec)
+    service = {k: v for k, v in _wfs().items() if k != "emprise_wgs84"} | {"le_long_de": {"couche": "x", "tampon_m": 500}}
+    c = _couche(cfg_test, service, "WFS", ff.FauxFlux())
+    assert c.nb_objets == 2
+    assert any("1 carreau(x) sans réponse" in a and "délai dépassé" in a for a in c.avertissements)
+
+
 # ---------------------------------------------------------------- GeoJSON par URL
 
 def test_geojson_systeme_par_defaut_wgs84_et_attributs_imbriques(cfg_test):
@@ -118,7 +168,10 @@ def test_cache_puis_panne_cache_perime(cfg_test):
     service = _geojson(cache_heures=0)
     _couche(cfg_test, service, "GeoJSON", ff.FauxFlux())
     esri.reinitialiser()
-    c = _couche(cfg_test, service, "GeoJSON", ff.FauxFlux(panne=True))
+    panne = ff.FauxFlux(panne=True)
+    assert _couche(cfg_test, service, "GeoJSON", panne).service["source"] == "actualisation"   # servi tout de suite
+    esri.attendre_actualisations()
+    c = _couche(cfg_test, service, "GeoJSON", panne)
     assert c.service["source"] == "cache_perime" and c.nb_objets == 3
     assert any("service indisponible" in a for a in c.avertissements)
 
@@ -144,6 +197,10 @@ def test_identifiants_distincts_et_service_retrouve(cfg_test):
 
 @pytest.mark.parametrize("section, service, attendu", [
     ("services_wfs", {"libelle": "x", "url": ff.WFS, "couche": "a:b"}, "emprise_wgs84"),
+    ("services_wfs", {"libelle": "x", "url": ff.WFS, "couche": "a:b", "le_long_de": {"couche": "GPE", "tampon_m": 9000}}, "tampon_m"),
+    ("services_wfs", {"libelle": "x", "url": ff.WFS, "couche": "a:b", "emprise_wgs84": MASSY,
+                      "le_long_de": {"couche": "GPE", "tampon_m": 500}}, "pas les deux"),
+    ("services_geojson", {"libelle": "x", "url": ff.GEOJSON, "le_long_de": {"couche": "GPE", "tampon_m": 500}}, "réservé aux services WFS"),
     ("services_wfs", {"libelle": "x", "url": ff.WFS, "emprise_wgs84": MASSY}, "couche"),
     ("services_wfs", {"libelle": "x", "url": ff.WFS, "couche": "a:b", "emprise_wgs84": [2.3, 48.7, 2.2, 48.8]}, "ouest, sud, est, nord"),
     ("services_geojson", {"libelle": "x", "url": "ftp://serveur/f.geojson"}, "http"),

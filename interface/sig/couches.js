@@ -56,6 +56,7 @@ const SOURCES = {
   service: 'téléchargée du service',
   cache: 'cache local à jour',
   cache_perime: 'service indisponible : cache ancien',
+  actualisation: 'cache ancien, actualisation en cours',
   repli: 'service indisponible : export de repli',
 };
 

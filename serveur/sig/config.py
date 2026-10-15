@@ -421,8 +421,19 @@ def _controler_flux(cfg: dict, section: str, services: list, erreur) -> None:
         if wfs and (not isinstance(s.get("couche"), str) or not s["couche"]):
             raise erreur(f"{nom} : « couche » absente (nom de la couche WFS, ex. « wfs_du:zone_urba »)")
         e = s.get("emprise_wgs84")
-        if wfs and e is None:
-            raise erreur(f"{nom} : « emprise_wgs84 » obligatoire (les services WFS publics sont nationaux)")
+        bande = s.get("le_long_de")
+        if bande is not None:
+            if not wfs:
+                raise erreur(f"{nom} : « le_long_de » est réservé aux services WFS")
+            if e is not None:
+                raise erreur(f"{nom} : « emprise_wgs84 » ou « le_long_de », pas les deux")
+            if not (isinstance(bande, dict) and isinstance(bande.get("couche"), str) and bande["couche"]
+                    and _nombre(bande.get("tampon_m"), True) and bande["tampon_m"] <= 5000
+                    and (bande.get("pas_m") is None or (_nombre(bande["pas_m"], True) and 200 <= bande["pas_m"] <= 20000))):
+                raise erreur(f"{nom} : « le_long_de » attend {{couche: libellé d'une couche fichier, tampon_m: 1 à 5000, "
+                             f"pas_m facultatif : 200 à 20000}}")
+        elif wfs and e is None:
+            raise erreur(f"{nom} : « emprise_wgs84 » ou « le_long_de » obligatoire (les services WFS publics sont nationaux)")
         nombres = isinstance(e, list) and len(e) == 4 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in e)
         if e is not None and not (nombres and -180 <= e[0] < e[2] <= 180 and -90 <= e[1] < e[3] <= 90):
             raise erreur(f"{nom} : « emprise_wgs84 » doit être [ouest, sud, est, nord] en degrés")
