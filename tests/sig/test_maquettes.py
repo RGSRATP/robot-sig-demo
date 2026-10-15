@@ -177,6 +177,17 @@ def test_altitudes_deja_absolues_detectees(cfg_test, cfgm, monkeypatch):
     assert any(a.startswith("altitude du site") and "ignorée" in a for a in pos["avertissements"])
 
 
+def test_position_hors_zone_plausible_non_positionnee(cfg_test, cfgm, monkeypatch):
+    """IfcMapConversion faux (constaté le 2026-10-15 : Tunisie, Suède) : maquette écartée, motif explicite ;
+    la saisie manuelle, choix explicite de l'utilisateur, n'est pas contrôlée."""
+    monkeypatch.setattr(maq.traitements, "assurer", lambda *a, **k: None)
+    monkeypatch.setitem(cfgm["identification"], "emprise_plausible_wgs84", [4.7, 45.6, 5.0, 45.9])   # Lyon : Massy hors zone
+    inv = {m["nom"]: m for m in maq.inventaire(cfg_test, cfgm)["maquettes"]}
+    pos = inv["methode1_map_conversion_ifc4"]["positionnement"]
+    assert pos["statut"] == "non_positionnee" and "hors de la zone plausible" in pos["raison"]
+    assert inv["methode3_manuelle"]["positionnement"]["statut"] == "positionnee"
+
+
 def test_declaration_par_motif(cfg_test, cfgm, monkeypatch):
     monkeypatch.setattr(maq.traitements, "assurer", lambda *a, **k: None)
     cfgm["systemes_declares"] = [{"motif": "methode2a_*", "systeme": "EPSG:3949"}]

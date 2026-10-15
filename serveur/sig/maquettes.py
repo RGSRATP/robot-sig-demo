@@ -609,6 +609,17 @@ def positionner(cfg: dict, cfgm: dict, id_: str, rel: str, res: dict, donnees_lo
     bl = _emprise(ex)
     cx, cy = (bl[0] + bl[2]) / 2, (bl[1] + bl[3]) / 2
     centre = lonlat(cx, cy)
+    # Vraisemblance du résultat (2026-10-15) : un géoréférencement faux du fichier (IfcMapConversion constaté sur
+    # 3 maquettes de L15/SUD/17IGR : Tunisie, Suède) placerait la maquette à des centaines de km et ferait dézoomer
+    # les vues cadrées sur les maquettes. Elle est alors « non positionnée », motif explicite ; une saisie manuelle
+    # (choix explicite de l'utilisateur) n'est pas contrôlée.
+    zone = ident.get("emprise_plausible_wgs84")
+    if zone and pos.get("methode") != "manuel" and not (zone[0] <= centre[0] <= zone[2] and zone[1] <= centre[1] <= zone[3]):
+        pos.update(statut="non_positionnee",
+                   raison=f"position calculée hors de la zone plausible ({centre[0]:.2f}° E, {centre[1]:.2f}° N, "
+                          f"{pos.get('libelle') or pos.get('methode')}) : géoréférencement du fichier à vérifier, "
+                          "ou saisie manuelle dans georef_maquettes.yaml")
+        return pos
     px, py, _ = georef.vers_projete(repere, cx, cy)
     centre_l93 = [round(v, 2) for v in vers_l93.transform(px, py)]
 
