@@ -1,0 +1,723 @@
+"""Carte de gestion de crise (lot C1) : éléments touchés autour d'un événement, zone par zone, en Lambert 93.
+
+Principe : pour un point d'événement, chaque objet des couches analysées (section « crise » de config/sig.yaml)
+reçoit sa distance exacte au point (point le plus proche pour une ligne ou une surface), jusqu'à « rayon_max_m ».
+Un objet est dans un cercle de rayon r si cette distance est ≤ r : l'interface recalcule ainsi les compteurs en
+direct pendant que l'utilisateur tire le cercle, sans appel au serveur. Une zone dessinée (polygone) est croisée
+ici. Un élément appartient à la zone la plus grave qui le contient (ordre de « crise.zones »).
+
+Rôles des catégories :
+- « points » (défaut) : un élément par objet, ou par valeur du champ « regroupement » (une station = ses lignes) ;
+- « stations » : comme « points », et les accès de la catégorie « acces » sont rattachés à la station la plus
+  proche (« rattachement_acces_m ») : une station est touchée par son point ou par l'un de ses accès ;
+- « lignes » : objets regroupés (une ligne = ses tronçons), longueur dans la zone, partie touchée dessinée ;
+- « plai » : points des PLAI ; un point de rassemblement dans une zone bloquante est déclaré inutilisable et le
+  plus proche hors de ces zones est proposé ;
+- « maquettes » : maquettes positionnées regroupées par ouvrage (dossier), ouvrages annexes signalés comme puits.
+
+Ne jamais bloquer : une couche absente ou illisible devient une anomalie, les autres catégories sont traitées.
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+import threading
+from collections import OrderedDict
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import shapely
+from pyproj import Transformer
+from shapely.geometry import Point, Polygon, mapping
+from shapely.ops import nearest_points, unary_union
+
+from . import inventaire as inv_sig
+from . import objets as obj_sig
+
+_VERS_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
+_VERS_WGS84 = Transformer.from_crs(2154, 4326, always_xy=True)
+ROLES = ("points", "stations", "acces", "lignes", "plai", "maquettes")
+DIRECTIONS = ("N", "NE", "E", "SE", "S", "SO", "O", "NO")
+CACHE_CANDIDATS = 16       # points d'événement gardés en mémoire (technique)
+SEGMENTS_CERCLE = 64       # quarts de cercle des zones circulaires (écart au vrai cercle < 8 cm à 1 km)
+DECIMALES_WGS84 = 6        # ~10 cm
+
+_verrou = threading.Lock()
+_objets_couches: dict = {}                    # (id couche, version) -> objets en Lambert 93
+_candidats: OrderedDict = OrderedDict()  # (centre, rayon, versions) -> candidats
+
+
+class ErreurCrise(ValueError):
+    """Demande invalide (zone mal formée, point hors du domaine) ; le message dit quoi corriger."""
+
+
+# ---------------------------------------------------------------- configuration
+
+def controler(c, erreur) -> None:
+    """Section « crise » de config/sig.yaml (facultative)."""
+    def nombre(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+
+    if not isinstance(c, dict):
+        raise erreur("« crise » doit être une section (dictionnaire)")
+    for cle in ("rayon_max_m", "rayon_defaut_m", "pas_m", "rattachement_acces_m"):
+        if not nombre(c.get(cle)):
+            raise erreur(f"« crise.{cle} » doit être un nombre strictement positif")
+    if c["rayon_defaut_m"] > c["rayon_max_m"]:
+        raise erreur("« crise.rayon_defaut_m » doit être inférieur ou égal à « rayon_max_m »")
+    if not isinstance(c.get("dossier_travail"), str) or not c["dossier_travail"]:
+        raise erreur("« crise.dossier_travail » attendu (dossier des événements enregistrés, hors Git)")
+    r = c.get("raccourcis_m")
+    if not (isinstance(r, list) and r and all(nombre(v) and v <= c["rayon_max_m"] for v in r)):
+        raise erreur("« crise.raccourcis_m » doit être une liste de rayons (m) entre 0 et « rayon_max_m »")
+    if not (isinstance(c.get("types"), list) and c["types"] and all(isinstance(t, str) for t in c["types"])):
+        raise erreur("« crise.types » doit être une liste de types d'événement")
+    zones = c.get("zones")
+    if not (isinstance(zones, list) and zones):
+        raise erreur("« crise.zones » doit être une liste de rôles de zone (du plus grave au moins grave)")
+    ids = set()
+    for i, z in enumerate(zones, 1):
+        if not (isinstance(z, dict) and isinstance(z.get("id"), str) and re.fullmatch(r"[a-z0-9_]+", z["id"])
+                and isinstance(z.get("libelle"), str) and isinstance(z.get("couleur"), str)):
+            raise erreur(f"« crise.zones » n° {i} : « id » (minuscules, chiffres, _), « libelle » et « couleur » attendus")
+        if z["id"] in ids:
+            raise erreur(f"« crise.zones » : identifiant « {z['id']} » en double")
+        ids.add(z["id"])
+    cats = c.get("categories")
+    if not (isinstance(cats, list) and cats):
+        raise erreur("« crise.categories » doit être une liste de catégories analysées")
+    vus = set()
+    for i, k in enumerate(cats, 1):
+        nom = f"« crise.categories » n° {i}"
+        if not (isinstance(k, dict) and isinstance(k.get("id"), str) and isinstance(k.get("libelle"), str)):
+            raise erreur(f"{nom} : « id » et « libelle » attendus")
+        if k["id"] in vus:
+            raise erreur(f"{nom} : identifiant « {k['id']} » en double")
+        vus.add(k["id"])
+        role = k.get("role", "points")
+        if role not in ROLES:
+            raise erreur(f"{nom} : « role » doit être l'un de : {', '.join(ROLES)}")
+        if role != "maquettes" and not (isinstance(k.get("couches"), list) and k["couches"]
+                                        and all(isinstance(x, str) for x in k["couches"])):
+            raise erreur(f"{nom} : « couches » attendu (libellés exacts des couches, comme dans le gestionnaire)")
+        p = k.get("propositions", {})
+        if not isinstance(p, dict) or any(z not in ids for z in p):
+            raise erreur(f"{nom} : « propositions » doit associer un texte à des rôles de zone déclarés ({', '.join(ids)})")
+        if role == "plai":
+            b = k.get("zones_bloquantes", [])
+            if not isinstance(k.get("champ_type"), str) or not isinstance(k.get("type_rassemblement"), str) \
+                    or not isinstance(b, list) or any(z not in ids for z in b):
+                raise erreur(f"{nom} : « champ_type », « type_rassemblement » et « zones_bloquantes » (rôles de zone) attendus")
+        if role == "maquettes":
+            d = k.get("dossiers")
+            if not (isinstance(d, dict) and d and all(isinstance(v, str) for v in d.values())):
+                raise erreur(f"{nom} : « dossiers » attendu (nom du dossier de la maquette → type d'ouvrage)")
+    roles = [k.get("role", "points") for k in cats]
+    if "acces" in roles and "stations" not in roles:
+        raise erreur("« crise.categories » : une catégorie « acces » demande une catégorie « stations »")
+
+
+def config_interface(cfg: dict) -> dict | None:
+    """Paramètres utiles à l'interface (rayons, rôles de zone, types, catégories)."""
+    c = cfg.get("crise")
+    if not c:
+        return None
+    return {
+        "rayon_max_m": c["rayon_max_m"], "rayon_defaut_m": c["rayon_defaut_m"], "pas_m": c["pas_m"],
+        "raccourcis_m": c["raccourcis_m"], "types": c["types"], "zones": c["zones"],
+        "categories": [{"id": k["id"], "libelle": k["libelle"], "role": k.get("role", "points"),
+                        "propositions": k.get("propositions", {})} for k in c["categories"]],
+        "avertissement": c.get("avertissement", ""),
+    }
+
+
+# ---------------------------------------------------------------- géométrie
+
+def vers_l93(lon: float, lat: float) -> tuple[float, float]:
+    x, y = _VERS_L93.transform(lon, lat)
+    if not (math.isfinite(x) and math.isfinite(y)):
+        raise ErreurCrise("point hors du domaine de Lambert 93")
+    return x, y
+
+
+def vers_wgs84(x: float, y: float) -> list[float]:
+    lon, lat = _VERS_WGS84.transform(x, y)
+    return [round(lon, DECIMALES_WGS84), round(lat, DECIMALES_WGS84)]
+
+
+def geojson_wgs84(geom_l93, tolerance_m: float = 1.0) -> dict | None:
+    """Géométrie Lambert 93 → GeoJSON WGS84, simplifiée (dessin seulement)."""
+    if geom_l93 is None or geom_l93.is_empty:
+        return None
+    g = geom_l93.simplify(tolerance_m) if tolerance_m else geom_l93
+    g = shapely.transform(g, lambda xy: np.column_stack(_VERS_WGS84.transform(xy[:, 0], xy[:, 1])))
+    return mapping(shapely.set_precision(g, 10 ** -DECIMALES_WGS84))
+
+
+def direction(dx: float, dy: float) -> str:
+    """Direction (8 secteurs) d'un vecteur Lambert 93 (Y vers le nord)."""
+    if dx == 0 and dy == 0:
+        return "—"
+    angle = (math.degrees(math.atan2(dx, dy)) + 360) % 360
+    return DIRECTIONS[int((angle + 22.5) // 45) % 8]
+
+
+def zones_geometriques(zones: list[dict], centre_l93: tuple[float, float], roles: list[str]) -> list[dict]:
+    """Zones de la demande, contrôlées, avec leur géométrie Lambert 93 et leur rang de gravité."""
+    sortie = []
+    for i, z in enumerate(zones, 1):
+        role = z.get("role")
+        if role not in roles:
+            raise ErreurCrise(f"zone n° {i} : rôle « {role} » inconnu (attendu : {', '.join(roles)})")
+        forme = z.get("forme", "cercle")
+        if forme == "cercle":
+            r = z.get("rayon_m")
+            if not isinstance(r, (int, float)) or isinstance(r, bool) or not r > 0:
+                raise ErreurCrise(f"zone n° {i} : « rayon_m » doit être un nombre strictement positif")
+            geom = Point(centre_l93).buffer(float(r), quad_segs=SEGMENTS_CERCLE)
+            sortie.append({"role": role, "rang": roles.index(role), "forme": "cercle", "rayon_m": float(r), "geom": geom})
+        elif forme == "polygone":
+            pts = z.get("coordonnees")
+            if not (isinstance(pts, list) and len(pts) >= 3):
+                raise ErreurCrise(f"zone n° {i} : polygone d'au moins 3 sommets [lon, lat] attendu")
+            try:
+                geom = Polygon([vers_l93(float(p[0]), float(p[1])) for p in pts])
+            except (TypeError, ValueError, IndexError) as e:
+                raise ErreurCrise(f"zone n° {i} : sommets [lon, lat] attendus") from e
+            if not geom.is_valid:
+                geom = shapely.make_valid(geom)
+            if geom.area <= 0:
+                raise ErreurCrise(f"zone n° {i} : polygone de surface nulle")
+            sortie.append({"role": role, "rang": roles.index(role), "forme": "polygone", "rayon_m": None, "geom": geom})
+        else:
+            raise ErreurCrise(f"zone n° {i} : forme « {forme} » inconnue (cercle ou polygone)")
+    return sortie
+
+
+def zone_de(geom, distance_m: float, zones: list[dict]) -> dict | None:
+    """Zone la plus grave qui contient (ou touche) l'objet ; cercle : distance au centre ≤ rayon (exact)."""
+    meilleure = None
+    for z in zones:
+        dedans = distance_m <= z["rayon_m"] if z["forme"] == "cercle" else geom.intersects(z["geom"])
+        if dedans and (meilleure is None or z["rang"] < meilleure["rang"]):
+            meilleure = z
+    return meilleure
+
+
+# ---------------------------------------------------------------- couches
+
+def _couches(cfg: dict, libelles: set[str]) -> tuple[dict[str, inv_sig.Couche], dict[str, str]]:
+    """Seules les couches demandées, par libellé : services (cache, sinon téléchargement), puis fichiers."""
+    from . import esri as esri_sig
+    services = {}
+    for s, c in esri_sig.services_declares(cfg):
+        services.setdefault(s["libelle"], (s, c))
+    trouvees, anomalies = {}, {}
+    for lib in sorted(libelles & services.keys()):
+        s, c = services[lib]
+        try:
+            trouvees[lib] = esri_sig.couche_service(cfg, s, rang=0, connecteur=c)
+        except inv_sig.AnomalieCouche as e:
+            anomalies[lib] = str(e)
+        except Exception as e:   # un service ne doit jamais interrompre l'analyse
+            anomalies[lib] = f"erreur inattendue ({type(e).__name__} : {e})"
+    reste = libelles - services.keys()
+    if reste:
+        for x in inv_sig.inventaire(cfg).couches:
+            if x.libelle in reste:
+                trouvees.setdefault(x.libelle, x)
+    return trouvees, anomalies
+
+
+def _version(couche: inv_sig.Couche) -> str:
+    try:
+        return str(couche._chemin.stat().st_mtime_ns)
+    except (OSError, AttributeError):
+        return "?"
+
+
+def _objets_l93(couche: inv_sig.Couche):
+    """(GeoDataFrame d'origine, géométries Lambert 93) gardés tant que la couche ne change pas."""
+    cle = (couche.id, _version(couche))
+    with _verrou:
+        if cle in _objets_couches:
+            return _objets_couches[cle]
+    charge = obj_sig.charger(couche)
+    geoms = charge.l93.geometry.values
+    val = (charge.origine, geoms, shapely.STRtree(geoms))
+    with _verrou:
+        for k in [k for k in _objets_couches if k[0] == couche.id]:
+            del _objets_couches[k]
+        _objets_couches[cle] = val
+    return val
+
+
+def _source(couche: inv_sig.Couche) -> dict:
+    s = couche.service or {}
+    date = s.get("date_maj")
+    if not date and couche._chemin is not None:
+        try:
+            date = datetime.fromtimestamp(couche._chemin.stat().st_mtime).isoformat(timespec="seconds")
+        except OSError:
+            date = None
+    return {"couche": couche.id, "libelle": couche.libelle, "date": date, "origine": s.get("source", "fichier"),
+            "avertissements": list(couche.avertissements[:3])}
+
+
+def _texte(v) -> str | None:
+    v = obj_sig.valeur_json(v)
+    if v is None:
+        return None
+    t = str(v).strip()
+    return t or None
+
+
+# ---------------------------------------------------------------- candidats (objets à moins de rayon_max du point)
+
+def _candidats_couche(couche, categorie: dict, centre: Point, rayon_max: float) -> list[dict]:
+    origine, geoms, arbre = _objets_l93(couche)
+    proches = arbre.query(centre.buffer(rayon_max), predicate="intersects")
+    if not len(proches):
+        return []
+    dist = shapely.distance(geoms[proches], centre)
+    regroupement = categorie.get("regroupement")
+
+    def colonne(nom):
+        """Valeurs du champ pour les objets proches (lecture en bloc : des dizaines de milliers d'objets)."""
+        if not nom or nom not in origine.columns:
+            return [None] * len(proches)
+        return [_texte(v) for v in origine[nom].to_numpy()[proches]]
+
+    libelles = colonne(categorie.get("champ_libelle") or couche.champ_libelle)
+    # « @couche » : un seul élément par couche (réseau de gaz, dont les tronçons n'ont pas de nom)
+    groupes = [couche.libelle] * len(proches) if regroupement == "@couche" else colonne(regroupement)
+    details, types = colonne(categorie.get("champ_detail")), colonne(categorie.get("champ_type"))
+    numeros = origine.index.to_numpy()[proches]
+    ponctuels = shapely.get_type_id(geoms[proches]) == 0
+    sortie = []
+    for i, (n, d) in enumerate(zip(proches.tolist(), dist.tolist())):
+        g = geoms[n]
+        sortie.append({
+            "n": int(numeros[i]), "couche": couche.id, "geom": g, "distance_m": float(d),
+            "proche": g if ponctuels[i] else nearest_points(g, centre)[0],
+            "libelle": libelles[i], "groupe": groupes[i], "detail": details[i], "type": types[i],
+        })
+    return sortie
+
+
+def _ouvrage(fichier: str, dossiers: dict) -> tuple[str, str, str] | None:
+    """(clé de l'ouvrage, nom, type) d'une maquette selon son chemin : dossier qui suit le dossier de type."""
+    parties = fichier.replace("\\", "/").split("/")
+    types = {k.lower(): v for k, v in dossiers.items()}
+    for i, p in enumerate(parties[:-1]):
+        if p.lower() in types:
+            nom = parties[i + 1] if i + 1 < len(parties) - 1 else Path(parties[-1]).stem
+            return "/".join(parties[:i + 2]), nom.strip(), p.lower()
+    return None
+
+
+def _candidats_maquettes(cfg: dict, categorie: dict, centre: Point, rayon_max: float) -> tuple[list[dict], list[str]]:
+    from . import maquettes as maq_sig
+    try:
+        cfgm = maq_sig.config()
+    except maq_sig.ConfigMaquettesInvalide as e:
+        return [], [f"maquettes : {e}"]
+    maq_sig.suivi.actualiser(cfg, cfgm)
+    o, s = vers_wgs84(centre.x - rayon_max, centre.y - rayon_max)
+    e, n = vers_wgs84(centre.x + rayon_max, centre.y + rayon_max)
+    sortie, anomalies = [], []
+    for ligne in maq_sig.suivi.dans_emprise([o - 0.01, s - 0.01, e + 0.01, n + 0.01]):
+        ouvrage = _ouvrage(ligne.get("fichier", ""), categorie["dossiers"])
+        if ouvrage is None:
+            continue
+        m = maq_sig.une_maquette(cfg, cfgm, ligne["id"])
+        pos = (m or {}).get("positionnement") or {}
+        if not pos.get("emprise_geojson"):
+            continue
+        try:
+            from .croisement import geometrie_l93
+            g = geometrie_l93(pos["emprise_geojson"])
+        except Exception as ex:   # emprise illisible : la maquette est signalée, les autres continuent
+            anomalies.append(f"{ligne.get('fichier')} : emprise illisible ({type(ex).__name__})")
+            continue
+        d = float(g.distance(centre))
+        if d > rayon_max:
+            continue
+        sortie.append({"n": None, "couche": None, "geom": g, "distance_m": d, "proche": nearest_points(g, centre)[0],
+                       "libelle": ouvrage[1], "groupe": ouvrage[0], "type": ouvrage[2], "detail": None,
+                       "maquette": ligne["id"]})
+    return sortie, anomalies
+
+
+def candidats(cfg: dict, centre_l93: tuple[float, float]) -> dict:
+    """Objets de chaque catégorie à moins de « rayon_max_m » du point (mis en cache par point)."""
+    c = cfg["crise"]
+    rayon_max = float(c["rayon_max_m"])
+    besoins = {lib for k in c["categories"] for lib in k.get("couches", [])}
+    par_libelle, anomalies_couches = _couches(cfg, besoins)
+    versions = tuple(sorted((lib, par_libelle[lib].id, _version(par_libelle[lib])) for lib in besoins if lib in par_libelle))
+    cle = (round(centre_l93[0], 1), round(centre_l93[1], 1), rayon_max, versions,
+           json.dumps(c["categories"], sort_keys=True, ensure_ascii=False))
+    with _verrou:
+        if cle in _candidats:
+            _candidats.move_to_end(cle)
+            return _candidats[cle]
+    centre = Point(centre_l93)
+    resultat = {"categories": {}, "sources": [], "anomalies": []}
+    for k in c["categories"]:
+        role = k.get("role", "points")
+        objets, sources = [], []
+        if role == "maquettes":
+            objets, anom = _candidats_maquettes(cfg, k, centre, rayon_max)
+            resultat["anomalies"] += [f"{k['libelle']} : {a}" for a in anom]
+            sources.append({"couche": None, "libelle": "Maquettes IFC positionnées", "date": None, "origine": "maquettes",
+                            "avertissements": []})
+        for lib in k.get("couches", []):
+            couche = par_libelle.get(lib)
+            if couche is None:
+                motif = anomalies_couches.get(lib)
+                resultat["anomalies"].append(f"{k['libelle']} : couche « {lib} » indisponible"
+                                             + (f" ({motif})" if motif else " (non déclarée ou illisible)"))
+                continue
+            try:
+                objets += _candidats_couche(couche, k, centre, rayon_max)
+                sources.append(_source(couche))
+            except inv_sig.AnomalieCouche as e:
+                resultat["anomalies"].append(f"{k['libelle']} : {lib} : {e}")
+        resultat["categories"][k["id"]] = objets
+        resultat["sources"] += [{**s, "categorie": k["id"]} for s in sources]
+    with _verrou:
+        _candidats[cle] = resultat
+        while len(_candidats) > CACHE_CANDIDATS:
+            _candidats.popitem(last=False)
+    return resultat
+
+
+# ---------------------------------------------------------------- analyse
+
+def _element(cat: dict, cle: str, libelle: str, membres: list[dict], centre: Point, zones: list[dict], **extra) -> dict:
+    """Élément de la liste : membre le plus proche, zone la plus grave parmi celles de ses membres."""
+    proche = min(membres, key=lambda m: m["distance_m"])
+    meilleure = None
+    # à gravité égale, le point de la station l'emporte sur ses accès (la cause « par l'accès » n'est dite que
+    # si la station elle-même est hors de cette zone), puis le membre le plus proche
+    for m in sorted(membres, key=lambda m: (bool(m.get("acces")), m["distance_m"])):
+        z = zone_de(m["geom"], m["distance_m"], zones)
+        if z is not None and (meilleure is None or z["rang"] < meilleure[0]["rang"]):
+            meilleure = (z, m)
+    p = proche["proche"]
+    e = {
+        "categorie": cat["id"], "cle": cle, "libelle": libelle,
+        "distance_m": round(proche["distance_m"], 1),
+        "direction": direction(p.x - centre.x, p.y - centre.y),
+        "position": (p.x, p.y),   # Lambert 93 ; converti en WGS84 par lot dans analyser()
+        "zone": meilleure[0]["role"] if meilleure else None,
+        "proposition": (cat.get("propositions") or {}).get(meilleure[0]["role"], "") if meilleure else "",
+        "couche": proche["couche"], "n": proche["n"],
+    }
+    e.update(extra)
+    if meilleure:
+        e["_membre_zone"] = meilleure[1]
+    return e
+
+
+def _detail(membres: list[dict]) -> str | None:
+    vals = sorted({m["detail"] for m in membres if m.get("detail")})
+    return ", ".join(vals) if vals else None
+
+
+def _groupes(objets: list[dict]) -> dict[str, list[dict]]:
+    g: dict[str, list[dict]] = {}
+    for o in objets:
+        cle = o["groupe"] or f"{o['couche']}:{o['n']}"
+        g.setdefault(cle, []).append(o)
+    return g
+
+
+def _analyser_points(cat, objets, centre, zones):
+    return [_element(cat, cle, m[0]["groupe"] or m[0]["libelle"] or f"objet n° {m[0]['n']}", m, centre, zones,
+                     detail=_detail(m))
+            for cle, m in _groupes(objets).items()]
+
+
+def _analyser_stations(cat, objets, acces, cfg_crise, centre, zones):
+    """Stations (regroupées) touchées par leur point ou par l'un de leurs accès (rattachés au plus proche)."""
+    groupes = _groupes(objets)
+    rayon = float(cfg_crise["rattachement_acces_m"])
+    if groupes and acces:
+        noms = list(groupes)
+        pts = [unary_union([m["geom"] for m in groupes[n]]) for n in noms]
+        arbre = shapely.STRtree(pts)
+        for a in acces:
+            i = arbre.nearest(a["geom"])
+            if i is not None and pts[i].distance(a["geom"]) <= rayon:
+                a["station"] = noms[int(i)]
+    elements = []
+    for cle, membres in groupes.items():
+        lies = [a for a in acces if a.get("station") == cle]
+        e = _element(cat, cle, cle, membres + [{**a, "acces": True} for a in lies], centre, zones,
+                     detail=_detail(membres), nb_acces=len(lies))
+        m = e.get("_membre_zone")
+        if m is not None and m.get("acces"):
+            # touchée seulement par un accès : la cause est dite (le point de la station est hors de cette zone)
+            e["cause"] = f"par l'accès « {m['libelle'] or 'sans nom'} » ({round(m['distance_m'])} m)"
+        elements.append(e)
+    return elements
+
+
+def _analyser_acces(cat, acces, centre, zones):
+    sortie = []
+    for a in acces:
+        e = _element(cat, f"{a['couche']}:{a['n']}", a["libelle"] or "Accès sans nom", [a], centre, zones,
+                     detail=f"station {a['station']} (rattachement par proximité)" if a.get("station")
+                     else "aucune station à proximité")
+        sortie.append(e)
+    return sortie
+
+
+def _analyser_lignes(cat, objets, centre, zones):
+    union = unary_union([z["geom"] for z in zones]) if zones else None
+    sortie = []
+    for cle, membres in _groupes(objets).items():
+        e = _element(cat, cle, membres[0]["groupe"] or membres[0]["libelle"] or cle, membres, centre, zones)
+        if e["zone"] and union is not None:
+            zone = next(z for z in zones if z["role"] == e["zone"])
+            trace = unary_union([m["geom"] for m in membres])
+            e["longueur_zone_m"] = round(trace.intersection(zone["geom"]).length) if zone["forme"] == "polygone" else \
+                round(trace.intersection(Point(centre).buffer(zone["rayon_m"], quad_segs=SEGMENTS_CERCLE)).length)
+            e["geometrie"] = geojson_wgs84(trace.intersection(union))
+            e["detail"] = f"{e['longueur_zone_m']:,} m de voie dans la zone".replace(",", " ")
+        sortie.append(e)
+    return sortie
+
+
+def _analyser_plai(cat, objets, centre, zones):
+    bloquantes = [z for z in zones if z["role"] in cat.get("zones_bloquantes", [])]
+    rassemblement = cat["type_rassemblement"]
+    sortie = []
+    for o in objets:
+        e = _element(cat, f"{o['couche']}:{o['n']}", o["libelle"] or o["type"] or "Point PLAI", [o], centre, zones,
+                     type=o["type"], detail=o["detail"])
+        sortie.append(e)
+    libres = [o for o in objets if o["type"] == rassemblement
+              and not any(zone_de(o["geom"], o["distance_m"], [z]) for z in bloquantes)]
+    for e, o in zip(sortie, objets):
+        if o["type"] != rassemblement or not e["zone"] or e["zone"] not in cat.get("zones_bloquantes", []):
+            continue
+        e["inutilisable"] = True
+        if libres:
+            r = min(libres, key=lambda x: x["geom"].distance(o["geom"]))
+            e["remplacement"] = {"libelle": r["libelle"] or "point de rassemblement", "couche": r["couche"], "n": r["n"],
+                                 "position": vers_wgs84(r["proche"].x, r["proche"].y),
+                                 "distance_m": round(r["geom"].distance(o["geom"]))}
+            e["proposition"] = (f"Inutilisable : utiliser « {e['remplacement']['libelle']} » "
+                                f"à {e['remplacement']['distance_m']} m, hors zone")
+        else:
+            e["proposition"] = "Inutilisable : aucun point de rassemblement connu hors zone, à définir sur place"
+    return sortie
+
+
+def _analyser_maquettes(cat, objets, centre, zones):
+    puits = {p.lower() for p in cat.get("puits", [])}
+    types = {k.lower(): v for k, v in cat["dossiers"].items()}
+    sortie = []
+    for cle, membres in _groupes(objets).items():
+        t = membres[0]["type"]
+        detail = f"{types.get(t, t)} · {len(membres)} maquette(s)"
+        e = _element(cat, cle, membres[0]["libelle"], membres, centre, zones, detail=detail, puits=t in puits,
+                     maquettes=sorted({m["maquette"] for m in membres}))
+        if e["puits"] and e["zone"]:
+            e["proposition"] = (e["proposition"] + " — " if e["proposition"] else "") + cat.get(
+                "message_puits", "puits : fumées ou gaz peuvent passer vers le souterrain")
+        if e["zone"]:
+            e["geometrie"] = geojson_wgs84(unary_union([m["geom"] for m in membres]), 0.5)
+        sortie.append(e)
+    return sortie
+
+
+def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict]) -> dict:
+    """Éléments touchés par catégorie et par zone, plus tous les candidats jusqu'à « rayon_max_m »."""
+    c = cfg["crise"]
+    try:
+        lon, lat = float(centre_wgs84[0]), float(centre_wgs84[1])
+    except (TypeError, ValueError, IndexError) as e:
+        raise ErreurCrise("« centre » attendu : [longitude, latitude]") from e
+    centre_l93 = vers_l93(lon, lat)
+    roles = [z["id"] for z in c["zones"]]
+    zg = zones_geometriques(zones or [], centre_l93, roles)
+    base = candidats(cfg, centre_l93)
+    centre = Point(centre_l93)
+    cats = {k["id"]: k for k in c["categories"]}
+    acces_cat = next((k for k in c["categories"] if k.get("role") == "acces"), None)
+    acces = [dict(a) for a in base["categories"].get(acces_cat["id"], [])] if acces_cat else []
+    categories = []
+    for k in c["categories"]:
+        role = k.get("role", "points")
+        objets = base["categories"].get(k["id"], [])
+        if role == "stations":
+            elements = _analyser_stations(k, objets, acces, c, centre, zg)
+        elif role == "acces":
+            elements = _analyser_acces(k, acces, centre, zg)
+        elif role == "lignes":
+            elements = _analyser_lignes(k, objets, centre, zg)
+        elif role == "plai":
+            elements = _analyser_plai(k, objets, centre, zg)
+        elif role == "maquettes":
+            elements = _analyser_maquettes(k, objets, centre, zg)
+        else:
+            elements = _analyser_points(k, objets, centre, zg)
+        for e in elements:
+            e.pop("_membre_zone", None)
+        if elements:   # positions converties en WGS84 en un seul appel (milliers d'objets)
+            xy = np.array([e["position"] for e in elements])
+            lon_, lat_ = _VERS_WGS84.transform(xy[:, 0], xy[:, 1])
+            for e, a, b in zip(elements, np.round(lon_, DECIMALES_WGS84).tolist(), np.round(lat_, DECIMALES_WGS84).tolist()):
+                e["position"] = [a, b]
+        elements.sort(key=lambda e: (roles.index(e["zone"]) if e["zone"] else len(roles), e["distance_m"]))
+        categories.append({"id": k["id"], "libelle": k["libelle"], "role": role, "elements": elements,
+                           "touches": sum(1 for e in elements if e["zone"])})
+    return {
+        "centre": {"wgs84": [lon, lat], "l93": [round(centre_l93[0], 2), round(centre_l93[1], 2)]},
+        "rayon_max_m": c["rayon_max_m"],
+        "zones": [{"role": z["role"], "forme": z["forme"], "rayon_m": z["rayon_m"], "surface_m2": round(z["geom"].area)}
+                  for z in zg],
+        "categories": categories,
+        "sources": base["sources"],
+        "anomalies": base["anomalies"],
+        "date": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+# ---------------------------------------------------------------- recherche d'un lieu
+
+def lieux(cfg: dict, q: str, max_resultats: int = 15) -> list[dict]:
+    """Stations et accès des catégories « stations » et « acces » dont le nom contient le texte."""
+    cible = obj_sig.normaliser(q.strip())
+    if len(cible) < 2:
+        return []
+    besoins = {lib for k in cfg["crise"]["categories"] if k.get("role") in ("stations", "acces") for lib in k["couches"]}
+    par_libelle, _ = _couches(cfg, besoins)
+    sortie, vus = [], set()
+    for k in cfg["crise"]["categories"]:
+        role = k.get("role", "points")
+        if role not in ("stations", "acces"):
+            continue
+        for lib in k.get("couches", []):
+            couche = par_libelle.get(lib)
+            if couche is None:
+                continue
+            try:
+                origine, geoms, _ = _objets_l93(couche)
+            except inv_sig.AnomalieCouche:
+                continue
+            champ = k.get("regroupement") if role == "stations" and k.get("regroupement") else (k.get("champ_libelle") or couche.champ_libelle)
+            if not champ or champ not in origine.columns:
+                continue
+            noms = origine[champ].astype(str)
+            for i in np.flatnonzero(noms.map(obj_sig.normaliser).str.contains(cible, regex=False).to_numpy()):
+                nom = noms.iloc[i]
+                cle = (role, nom)
+                if role == "stations" and cle in vus:
+                    continue
+                vus.add(cle)
+                p = geoms[i].centroid
+                sortie.append({"type": "Station" if role == "stations" else "Accès", "libelle": nom,
+                               "position": vers_wgs84(p.x, p.y)})
+    sortie.sort(key=lambda s: (s["type"] != "Station", not obj_sig.normaliser(s["libelle"]).startswith(cible), s["libelle"]))
+    return sortie[:max_resultats]
+
+
+# ---------------------------------------------------------------- export CSV
+
+COLONNES = [("zone", "Zone"), ("categorie", "Catégorie"), ("libelle", "Élément"), ("detail", "Détail"),
+            ("cause", "Cause"), ("distance_m", "Distance (m)"), ("direction", "Direction"),
+            ("proposition", "Proposition"), ("lon", "Longitude"), ("lat", "Latitude"), ("source", "Source"),
+            ("date_source", "Date de la donnée")]
+
+
+def lignes_csv(cfg: dict, r: dict) -> list[dict]:
+    zones = {z["id"]: z["libelle"] for z in cfg["crise"]["zones"]}
+    sources = {}
+    for s in r["sources"]:
+        sources.setdefault(s["categorie"], []).append(s)
+    lignes = []
+    for k in r["categories"]:
+        src = sources.get(k["id"], [])
+        for e in k["elements"]:
+            if not e["zone"]:
+                continue
+            s = next((x for x in src if x["couche"] == e.get("couche")), src[0] if src else {})
+            lignes.append({"zone": zones.get(e["zone"], e["zone"]), "categorie": k["libelle"], "libelle": e["libelle"],
+                           "detail": e.get("detail"), "cause": e.get("cause"), "distance_m": e["distance_m"],
+                           "direction": e["direction"], "proposition": e.get("proposition"),
+                           "lon": e["position"][0], "lat": e["position"][1],
+                           "source": s.get("libelle"), "date_source": s.get("date")})
+    return lignes
+
+
+# ---------------------------------------------------------------- événements enregistrés (poste local)
+
+def dossier_evenements(cfg: dict) -> Path:
+    from .config import RACINE
+    p = Path(cfg["crise"]["dossier_travail"])
+    return p if p.is_absolute() else RACINE / p
+
+
+_ID = re.compile(r"^[0-9]{8}-[0-9]{6}$")
+
+
+def enregistrer(cfg: dict, evt: dict) -> dict:
+    """Écrit l'événement (description, centre, zones) dans le dossier de travail ; renvoie son identifiant."""
+    if not isinstance(evt, dict):
+        raise ErreurCrise("événement attendu")
+    titre = evt.get("titre")
+    if not isinstance(titre, str) or not titre.strip():
+        raise ErreurCrise("« titre » de l'événement attendu")
+    if evt.get("mode") not in ("reel", "exercice"):
+        raise ErreurCrise("« mode » attendu : reel ou exercice")
+    if evt.get("centre") is not None:
+        vers_l93(*map(float, evt["centre"]))
+        zones_geometriques(evt.get("zones") or [], vers_l93(*map(float, evt["centre"])),
+                           [z["id"] for z in cfg["crise"]["zones"]])
+    id_ = evt.get("id") or datetime.now().strftime("%Y%m%d-%H%M%S")
+    if not _ID.match(id_):
+        raise ErreurCrise("identifiant d'événement invalide")
+    garde = {k: evt.get(k) for k in ("titre", "type", "mode", "debut", "description", "centre", "zones")}
+    garde.update({"id": id_, "modifie": datetime.now().isoformat(timespec="seconds")})
+    d = dossier_evenements(cfg)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"{id_}.json.tmp"
+    tmp.write_text(json.dumps(garde, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(d / f"{id_}.json")
+    return garde
+
+
+def evenements(cfg: dict) -> list[dict]:
+    d = dossier_evenements(cfg)
+    sortie = []
+    for p in sorted(d.glob("*.json"), reverse=True) if d.is_dir() else []:
+        try:
+            e = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        sortie.append({k: e.get(k) for k in ("id", "titre", "type", "mode", "debut", "modifie")})
+    return sortie
+
+
+def evenement(cfg: dict, id_: str) -> dict | None:
+    if not _ID.match(id_ or ""):
+        return None
+    p = dossier_evenements(cfg) / f"{id_}.json"
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def reinitialiser() -> None:
+    """Vide les caches (tests)."""
+    with _verrou:
+        _objets_couches.clear()
+        _candidats.clear()

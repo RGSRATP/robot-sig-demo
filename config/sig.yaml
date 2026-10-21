@@ -92,6 +92,15 @@ vues:
     batiments: true
     lidar: false
     camera: { centre_wgs84: [2.345, 48.866], zoom: 15 }
+  - id: crise
+    libelle: "Crise"
+    description: "Carte de gestion de crise : placez l'événement, tirez le cercle, lisez ce qui est touché zone par zone (section « crise »)."
+    couches: ["Tracés du réseau ferré IDF (IDFM)", "Gares et stations IDF (IDFM)", "Accès des gares (IDFM)", "Plans d'intervention (PLAI)"]
+    temps_reel: []
+    relief: false
+    batiments: false
+    lidar: false
+    outil: crise                       # ouvre le volet « Crise »
 
 carte:
   centre_wgs84: [2.35, 48.85]   # Île-de-France
@@ -686,3 +695,90 @@ services_plai:
           rassemblement: [120, 0]
           quais: [0, -150]
     visible: false
+
+# Carte de gestion de crise (lot C1, 2026-10-21) : éléments touchés autour d'un événement, zone par zone.
+# Distances en Lambert 93 au point de l'événement (point le plus proche d'une ligne ou d'une surface) ; un élément
+# appartient à la zone la plus grave qui le contient (ordre de « zones »). L'outil aide à décider, il ne décide pas.
+# Catégories : id, libelle, couches (libellés EXACTS des couches) ; facultatives : role (points, stations, acces,
+# lignes, plai, maquettes ; défaut points), champ_libelle, regroupement (champ qui réunit plusieurs objets en un
+# élément ; « @couche » : un élément par couche), champ_detail, propositions (texte par rôle de zone).
+crise:
+  dossier_travail: "travail/crise"     # événements enregistrés (hors Git)
+  rayon_max_m: 3000                    # objets cherchés jusqu'à cette distance (compteurs en direct)
+  rayon_defaut_m: 500                  # simple clic sans glisser
+  pas_m: 10                            # arrondi du rayon pendant le glissement (Maj : au mètre)
+  raccourcis_m: [500, 600, 1000]
+  rattachement_acces_m: 250            # un accès est rattaché à la station la plus proche à moins de cette distance
+  types: ["Explosion", "Incendie", "Effondrement", "Fuite de gaz", "Colis suspect", "Inondation", "Accident de voirie", "Autre"]
+  avertissement: "Aide à la décision : données ouvertes et PLAI à leur date, à confirmer sur place."
+  zones:                               # du plus grave au moins grave
+    - { id: evacuation, libelle: "Évacuation", couleur: "#e03131" }
+    - { id: fermeture, libelle: "Fermeture / accès interdit", couleur: "#f76707" }
+    - { id: vigilance, libelle: "Vigilance / confinement", couleur: "#f2c200" }
+  categories:
+    - id: stations
+      libelle: "Stations"
+      role: stations
+      couches: ["Gares et stations IDF (IDFM)"]
+      regroupement: "nom_zdc"          # une station = toutes ses lignes
+      champ_detail: "res_com"
+      propositions: { evacuation: "Fermer la station", fermeture: "Fermer ou passer sans arrêt (à décider)", vigilance: "Surveiller" }
+    - id: acces
+      libelle: "Accès des stations"
+      role: acces
+      couches: ["Accès des gares (IDFM)"]
+      champ_libelle: "accname"
+      propositions: { evacuation: "Fermer l'accès", fermeture: "Fermer l'accès", vigilance: "Surveiller" }
+    - id: lignes
+      libelle: "Lignes (tronçons touchés)"
+      role: lignes
+      couches: ["Tracés du réseau ferré IDF (IDFM)"]
+      regroupement: "res_com"
+      propositions: { evacuation: "Interrompre le trafic sur le tronçon", fermeture: "Interruption ou marche à vue (à décider)", vigilance: "Informer l'exploitation" }
+    - id: ouvrages
+      libelle: "Ouvrages RATP (maquettes)"
+      role: maquettes
+      dossiers: { "gare": "Gare", "intergare": "Tunnel (intergare)", "ouvrage annexe": "Ouvrage annexe" }
+      puits: ["ouvrage annexe"]
+      message_puits: "puits : fumées ou gaz peuvent passer vers le souterrain"
+      propositions: { evacuation: "Évacuer les équipes, ouvrage à sécuriser", fermeture: "Interdire l'accès à l'ouvrage", vigilance: "Surveiller" }
+    - id: plai
+      libelle: "Points d'intervention (PLAI)"
+      role: plai
+      couches: ["Plans d'intervention (PLAI)"]
+      champ_libelle: "libelle_type"
+      champ_detail: "station"
+      champ_type: "type"
+      type_rassemblement: "rassemblement"
+      zones_bloquantes: [evacuation, fermeture]
+      propositions: { evacuation: "Dans la zone d'évacuation", fermeture: "Dans la zone de fermeture", vigilance: "Utilisable, à surveiller" }
+    - id: ecoles
+      libelle: "Établissements scolaires"
+      couches: ["Établissements scolaires (Éducation nationale)"]
+      champ_libelle: "nom_etablissement"
+      champ_detail: "type_etablissement"
+      propositions: { evacuation: "Évacuer", fermeture: "Évacuer ou confiner (à décider)", vigilance: "Confiner, informer" }
+    - id: gaz
+      libelle: "Réseaux de gaz"
+      role: lignes
+      couches: ["Réseau de transport de gaz (NaTran, ODRÉ)", "Réseau GRDF – Massy"]
+      regroupement: "@couche"
+      propositions: { evacuation: "Alerter le gestionnaire du réseau", fermeture: "Alerter le gestionnaire du réseau", vigilance: "Informer le gestionnaire" }
+    - id: chantiers
+      libelle: "Chantiers (Paris)"
+      couches: ["Chantiers en cours à Paris"]
+      champ_libelle: "chantier_synthese"
+      champ_detail: "moa_principal"
+      propositions: { evacuation: "Arrêter et évacuer le chantier", fermeture: "Arrêter le chantier", vigilance: "Gêne possible pour les secours" }
+    - id: travaux
+      libelle: "Travaux perturbants (Paris)"
+      couches: ["Travaux perturbants (Paris)"]
+      champ_libelle: "voie"
+      champ_detail: "impact_circulation"
+      propositions: { evacuation: "Gêne pour les secours", fermeture: "Gêne pour les secours", vigilance: "Gêne possible pour les secours" }
+    - id: defibrillateurs
+      libelle: "Défibrillateurs RATP"
+      couches: ["Défibrillateurs du réseau RATP"]
+      champ_libelle: "adr_voie"
+      champ_detail: "acc_complt"
+      propositions: { vigilance: "Disponible à proximité" }

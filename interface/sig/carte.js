@@ -20,6 +20,7 @@ import { GestionnaireLidar } from './lidar.js';
 import { GestionnaireTempsReel } from './tempsreel.js';
 import { OutilMesure } from './mesures.js';
 import { OutilCoupe } from './coupe.js';
+import { OutilCrise } from './crise.js';
 import { sectionFiltres } from './filtres.js';
 import { bouton, creerCoque, el, icone } from './ui.js';
 import { CoucheMaquettes3D } from './vue3d.js';
@@ -217,6 +218,7 @@ export async function monterCarte(conteneur) {
   const pFonds = g.ajouter('fonds', 'Fonds de carte', 'fonds');
   const pTempsReel = g.ajouter('tempsreel', 'Temps réel', 'temps');
   const pMesures = g.ajouter('mesures', 'Mesures', 'regle');
+  const pCrise = g.ajouter('crise', 'Crise', 'crise');
   const pRecherche = g.ajouter('recherche', 'Recherche', 'recherche');
   const pAnomalies = g.ajouter('anomalies', 'Anomalies', 'anomalies');
   const anomaliesCouches = el('div');
@@ -371,6 +373,9 @@ export async function monterCarte(conteneur) {
   // Plan de coupe ajustable (volet Vue 3D) : coupe la 3D, les bâtiments et les points et lignes SIG
   const coupe = new OutilCoupe(carte, c3d, { couches, batiments });
   pVue3d.append(coupe.section());
+  // Carte de gestion de crise (lot C1) : événement, cercles au rayon libre, éléments touchés zone par zone
+  const crise = cfg.crise ? new OutilCrise(carte, cfg.crise, { panneau: pCrise, coque, couches, maquettes, police: cfg.police }) : null;
+  if (!crise) pCrise.append(el('p', { className: 'sig-info', textContent: 'Section « crise » absente de config/sig.yaml.' }));
   function majBadge() {
     const n = (couches.inventaire?.anomalies.length || 0) + (maquettes.nbAnomalies || 0);
     g.badge('anomalies', n, true);
@@ -379,7 +384,7 @@ export async function monterCarte(conteneur) {
 
   // Répartition des clics : local du plan affiché, objet de maquette 3D, objet SIG, emprise de maquette.
   carte.on('click', async (e) => {
-    if (coupe.clic(e) || mesure.clic(e)) return;
+    if (coupe.clic(e) || mesure.clic(e) || crise?.clic(e)) return;
     if (await maquettes.deplierGroupe(e.point)) return;   // groupe de maquettes (vue éloignée) : zoom
     const local = c3d.localSous(e.point);
     if (local) {
@@ -430,7 +435,7 @@ export async function monterCarte(conteneur) {
   });
   // Double-clic sur un objet de maquette : vue centrée sur lui, à sa hauteur (au lieu du zoom de la carte).
   carte.on('dblclick', (e) => {
-    if (mesure.doubleClic()) { e.preventDefault(); return; }
+    if (mesure.doubleClic() || crise?.doubleClic()) { e.preventDefault(); return; }
     const cible3d = c3d.objetSous(e.point);
     if (!cible3d) return;
     e.preventDefault();
@@ -438,6 +443,8 @@ export async function monterCarte(conteneur) {
     maquettes.zoomerObjet();
   });
   carte.on('mousemove', (e) => {
+    const curseurCrise = crise?.survol(e.point);
+    if (curseurCrise) { carte.getCanvas().style.cursor = curseurCrise; return; }
     const touche = tempsReel.objetSous(e.point) || couches.objetSous(e.point) || maquettes.empriseSous(e.point) || batiments?.sous(e.point)
       || carte.queryRenderedFeatures(e.point, { layers: ['sig-maquettes-groupes'].filter((c) => carte.getLayer(c)) }).length;
     carte.getCanvas().style.cursor = touche ? 'pointer' : '';
@@ -455,6 +462,7 @@ export async function monterCarte(conteneur) {
       await tempsReel.demarrer();
       mesure.installer();
       coupe.installer(cfg.police);
+      crise?.installer();
     } finally {
       vues.signalerPret();   // même après un échec : une vue demandée s'applique à ce qui est chargé
     }

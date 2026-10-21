@@ -452,3 +452,39 @@ a.sig-bouton { text-decoration: none; display: inline-block; }
   color: #fff; font: 700 18px/1 system-ui, sans-serif; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
 .sig-poignee-decalage__valeur { padding: 1px 6px; border-radius: 8px; background: rgba(255,255,255,.92); color: #7a2e00;
   font: 600 11px/1.4 var(--sig-police); white-space: nowrap; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+
+/* ---------------------------------------------------------------- carte de gestion de crise (lot C1) */
+.sig-champ { font: inherit; padding: 4px 6px; border: 1px solid var(--sig-trait); border-radius: 2px; background: var(--sig-fond); color: var(--sig-encre); width: 100%; box-sizing: border-box; }
+textarea.sig-champ { resize: vertical; margin: 6px 0; }
+.sig-crise-ligne { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px 8px; margin: 6px 0; }
+.sig-crise-ligne > span:first-child { color: var(--sig-gris); }
+.sig-crise-consigne { background: #fff4e6; border-left: 3px solid #f76707; padding: 6px 8px; margin: 6px 0 10px; }
+.sig-crise-mode { display: inline-block; font: 700 11px/1 var(--sig-police-titre); letter-spacing: .06em; padding: 4px 8px; margin: 2px 0 6px; color: #fff; }
+.sig-crise-mode--exercice { background: #1971c2; }
+.sig-crise-mode--reel { background: #c92a2a; }
+.sig-crise-zone { border: 1px solid var(--sig-trait); border-radius: 2px; padding: 6px 8px; margin: 0 0 8px; }
+.sig-crise-zone__tete { display: flex; align-items: center; gap: 8px; }
+.sig-crise-role { flex: 1; width: auto; }
+.sig-crise-rayon { font-variant-numeric: tabular-nums; }
+.sig-crise-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.sig-crise-table th, .sig-crise-table td { padding: 3px 4px; border-bottom: 1px solid var(--sig-trait-2); text-align: right; font-weight: 400; }
+.sig-crise-table thead th { font-size: 11px; color: var(--sig-gris); white-space: nowrap; }
+.sig-crise-table tbody th { text-align: left; }
+.sig-crise-nombre { font-weight: 700 !important; }
+.sig-crise-zero { color: var(--sig-trait); }
+.sig-crise-categorie { margin: 0 0 10px; }
+.sig-crise-categorie > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.sig-crise-elements, .sig-crise-liste { list-style: none; margin: 4px 0; padding: 0; }
+.sig-crise-element { padding: 5px 0; border-bottom: 1px solid var(--sig-trait-2); }
+.sig-crise-element__tete { display: flex; align-items: center; gap: 6px; }
+.sig-crise-nom { flex: 1; font-weight: 500; }
+.sig-crise-distance { color: var(--sig-gris); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sig-crise-proposition { font-size: 12px; margin-top: 2px; }
+.sig-crise-proposition--alerte { color: var(--sig-rouge); font-weight: 600; }
+.sig-crise-liste li { padding: 2px 0; }
+.sig-crise-bandeau {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 3; max-width: 70%;
+  padding: 7px 16px; color: #fff; font: 700 13px/1.3 var(--sig-police-titre); letter-spacing: .03em; box-shadow: var(--sig-ombre); text-align: center;
+}
+.sig-crise-bandeau--exercice { background: repeating-linear-gradient(135deg, #1971c2 0 14px, #1864ab 14px 28px); }
+.sig-crise-bandeau--reel { background: #c92a2a; }

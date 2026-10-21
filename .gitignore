@@ -33,3 +33,6 @@ desktop.ini
 
 # Téléchargements bruts du générateur de jeu de test
 tests/donnees/sources/
+
+# Événements de la carte de gestion de crise (lot C1) : restent sur le poste
+/travail/

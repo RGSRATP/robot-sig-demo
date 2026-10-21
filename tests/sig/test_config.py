@@ -233,7 +233,7 @@ def test_nom_de_l_application_transmis_a_l_interface():
 
 def test_vues_thematiques_valides_et_transmises():
     vues = cfg_sig.config_carte(cfg_sig.charger_config())["vues"]
-    assert [v["id"] for v in vues] == ["generale", "inondations", "carbone", "ouvrages", "sous-sol", "ferroviaire", "reseaux", "intervention"]
+    assert [v["id"] for v in vues] == ["generale", "inondations", "carbone", "ouvrages", "sous-sol", "ferroviaire", "reseaux", "intervention", "crise"]
 
 
 @pytest.mark.parametrize("vue, attendu", [
@@ -243,6 +243,7 @@ def test_vues_thematiques_valides_et_transmises():
     ({"id": "a", "libelle": "a", "relief": "oui"}, "relief"),
     ({"id": "a", "libelle": "a", "couches": "Gares"}, "couches"),
     ({"id": "a", "libelle": "a", "camera": {"zoom": 10}}, "camera"),
+    ({"id": "a", "libelle": "a", "outil": "radar"}, "outil"),
 ])
 def test_vues_invalides(tmp_path, vue, attendu):
     import yaml

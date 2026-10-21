@@ -84,6 +84,9 @@ def _controler(cfg: dict, chemin: Path) -> dict:
                          "« delai_etages_s » des nombres > 0 (clés facultatives)")
 
     _controler_vues(cfg.get("vues"), erreur)
+    if cfg.get("crise") is not None:
+        from .crise import controler as controler_crise
+        controler_crise(cfg["crise"], erreur)
 
     if not _nombre(carte.get("hauteur_coupe_plan_m"), True):
         raise erreur("« carte.hauteur_coupe_plan_m » doit être un nombre strictement positif (ex. 1.5)")
@@ -285,6 +288,7 @@ CLES_TEMPS_REEL = {
 
 
 THEMES_VUES = ("point_bas", "carbone", "categories")
+OUTILS_VUES = ("crise", "couches", "maquettes", "mesures")   # volet ouvert par une vue (« outil »)
 
 
 def _controler_vues(vues, erreur) -> None:
@@ -312,6 +316,8 @@ def _controler_vues(vues, erreur) -> None:
         if v.get("theme") == "categories" and not (isinstance(v.get("categories"), list) and v["categories"] and all(
                 isinstance(c, dict) and isinstance(c.get("libelle"), str) and isinstance(c.get("motifs"), list) for c in v["categories"])):
             raise erreur(f"{nom} : « categories » attendu (liste de {{libelle, motifs}})")
+        if v.get("outil") is not None and v["outil"] not in OUTILS_VUES:
+            raise erreur(f"{nom} : « outil » doit être l'un de : {', '.join(OUTILS_VUES)}")
         cam = v.get("camera")
         if cam is not None and cam != "maquettes" and not (isinstance(cam, dict) and isinstance(cam.get("centre_wgs84"), list)
                                                             and _nombre(cam.get("zoom"))):
@@ -498,6 +504,11 @@ def config() -> dict:
     return charger_config()
 
 
+def _config_crise(cfg: dict) -> dict | None:
+    from .crise import config_interface
+    return config_interface(cfg)
+
+
 def config_carte(cfg: dict) -> dict:
     """Paramètres utiles à l'interface : centre, zoom et fonds IGN, dans l'ordre du fichier."""
     fonds = cfg["fonds_ign"]
@@ -515,6 +526,7 @@ def config_carte(cfg: dict) -> dict:
         "relief": config_relief(cfg),
         "batiments": config_batiments(cfg),
         "lidar": config_lidar(cfg),
+        "crise": _config_crise(cfg),
         "fonds": [
             {
                 "id": nom,

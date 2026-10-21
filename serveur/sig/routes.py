@@ -9,13 +9,14 @@ from pathlib import Path
 import platform
 from importlib.metadata import PackageNotFoundError, version
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
 from . import config as cfg_sig
 from . import carbone as carb_sig
 from . import calage as cal_sig
 from . import contexte as ctx_sig
+from . import crise as crise_sig
 from . import croisement as crois_sig
 from . import esri as esri_sig
 from . import inventaire as inv_sig
@@ -542,3 +543,56 @@ def maquette_carbone(id_maquette: str, format: str = Query("json", pattern="^(js
     if format == "csv":
         return _csv(cfg, carb_sig.COLONNES, b["materiaux"], f"carbone_{Path(rel).stem}")
     return {**b, "maquette": {"id": id_maquette, "fichier": rel}}
+
+
+# ---------------------------------------------------------------- carte de gestion de crise (lot C1)
+
+def _crise(cfg: dict = Depends(_config_valide)) -> dict:
+    if not cfg.get("crise"):
+        raise HTTPException(status_code=404, detail="section « crise » absente de config/sig.yaml")
+    return cfg
+
+
+@routeur.post("/crise/analyse")
+def crise_analyse(demande: dict = Body(..., examples=[{"centre": [2.3691, 48.8532],
+                                                        "zones": [{"role": "evacuation", "forme": "cercle", "rayon_m": 500}]}]),
+                  format: str = Query("json", pattern="^(json|csv)$"), cfg: dict = Depends(_crise)):
+    """Éléments touchés autour du point, par catégorie et par zone (la plus grave l'emporte), et tous les objets
+    jusqu'à « rayon_max_m » avec leur distance (l'interface recalcule les cercles en direct)."""
+    try:
+        r = crise_sig.analyser(cfg, demande.get("centre"), demande.get("zones") or [])
+    except crise_sig.ErreurCrise as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if format == "csv":
+        titre = str(demande.get("titre") or "evenement")
+        return _csv(cfg, crise_sig.COLONNES, crise_sig.lignes_csv(cfg, r), f"crise_{titre}")
+    return _json(r)
+
+
+@routeur.get("/crise/lieux")
+def crise_lieux(q: str = Query(..., min_length=2, max_length=80), cfg: dict = Depends(_crise)):
+    """Stations et accès dont le nom contient le texte (placement de l'événement)."""
+    return {"resultats": crise_sig.lieux(cfg, q)}
+
+
+@routeur.get("/crise/evenements")
+def crise_evenements(cfg: dict = Depends(_crise)):
+    """Événements enregistrés sur le poste, du plus récent au plus ancien."""
+    return {"evenements": crise_sig.evenements(cfg)}
+
+
+@routeur.get("/crise/evenements/{id_evenement}")
+def crise_evenement(id_evenement: str, cfg: dict = Depends(_crise)):
+    e = crise_sig.evenement(cfg, id_evenement)
+    if e is None:
+        raise HTTPException(status_code=404, detail=f"événement inconnu : {id_evenement}")
+    return e
+
+
+@routeur.post("/crise/evenements")
+def crise_enregistrer(evt: dict = Body(...), cfg: dict = Depends(_crise)):
+    """Enregistre l'événement (description, point, zones) dans le dossier de travail du poste."""
+    try:
+        return crise_sig.enregistrer(cfg, evt)
+    except crise_sig.ErreurCrise as e:
+        raise HTTPException(status_code=422, detail=str(e))

@@ -119,7 +119,7 @@ export class GestionnaireVues {
       const c = v.camera;
       r.carte.flyTo({ center: c.centre_wgs84, zoom: c.zoom, pitch: c.inclinaison ?? 0, bearing: c.orientation ?? 0, duration: 1200 });
     }
-    r.gauche.ouvrir(v.theme ? null : 'couches');   // vue thématique : la carte en grand, la légende explique
+    r.gauche.ouvrir(v.outil || (v.theme ? null : 'couches'));   // outil de la vue (crise), sinon thème : la carte en grand
     if (!v.theme) {
       r.maquettes.definirTheme(null);
       this.legende.hidden = true;
