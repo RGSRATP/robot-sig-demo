@@ -15,15 +15,16 @@ const CLIC_SANS_GLISSER_PX = 6;   // en dessous : simple clic, rayon par défaut
 const MAX_LISTE = 40;             // éléments montrés par catégorie (les autres : dans l'export)
 const COULEUR_EVENEMENT = '#c92a2a';
 const COULEUR_REMPLACEMENT = '#2b8a3e';
+const DELAI_ANALYSE_MS = 60000;   // au-delà : abandon, message et bouton « Relancer »
 
 const nf = (v, d = 0) => Number(v).toLocaleString('fr-FR', { maximumFractionDigits: d });
 const distance = (m) => (m >= 1000 ? `${nf(m / 1000, 2)} km` : `${nf(m)} m`);
 const heure = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '');
 
-async function poster(chemin, corps, params = {}) {
+async function poster(chemin, corps, params = {}, signal = undefined) {
   const url = new URL(`api/sig/${chemin}`, document.baseURI);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corps) });
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corps), signal });
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
     throw new Error(e.detail || `réponse ${r.status}`);
@@ -364,6 +365,11 @@ export class OutilCrise {
   }
 
   terminer() {
+    this._requete += 1;   // une analyse en cours est ignorée
+    this._abandon?.abort();
+    clearInterval(this._minuteur);
+    this.chargement = false;
+    this.erreurAnalyse = null;
     this.evt = null;
     this.resultat = null;
     this.mode = null;
@@ -378,20 +384,53 @@ export class OutilCrise {
   async analyser() {
     if (!this.evt?.centre) return;
     const n = (this._requete += 1);
+    this._abandon?.abort();
+    const abandon = new AbortController();
+    this._abandon = abandon;
+    const delai = setTimeout(() => abandon.abort(new Error(`pas de réponse du serveur après ${DELAI_ANALYSE_MS / 1000} s`)), DELAI_ANALYSE_MS);
     this.chargement = true;
+    this.erreurAnalyse = null;
+    this._debutAnalyse = Date.now();
+    clearInterval(this._minuteur);   // temps écoulé affiché : on voit que l'analyse avance
+    this._minuteur = setInterval(() => this._majEtat(), 1000);
+    this._majEtat();
     try {
-      const r = await poster('crise/analyse', { centre: this.evt.centre, zones: this.evt.zones });
+      const r = await poster('crise/analyse', { centre: this.evt.centre, zones: this.evt.zones }, {}, abandon.signal);
       const res = await r.json();
       if (n !== this._requete) return;   // une demande plus récente est partie
       this.resultat = res;
-      this.message = null;
     } catch (e) {
       if (n !== this._requete) return;
-      this.message = `Analyse impossible : ${e.message}`;
+      const cause = abandon.signal.reason?.message || e.message;
+      this.erreurAnalyse = /fetch|network|réseau/i.test(cause) ? `serveur injoignable (${cause}) : vérifiez qu'il est lancé` : cause;
+    } finally {
+      clearTimeout(delai);
     }
+    if (n !== this._requete) return;
+    clearInterval(this._minuteur);
     this.chargement = false;
     if (!this.glisse) this._dessiner();
     this._rendre();
+  }
+
+  /** Ligne d'état de l'analyse (en cours avec le temps écoulé, ou erreur avec « Relancer »). */
+  _etatAnalyse() {
+    if (this.chargement) {
+      const s = Math.round((Date.now() - (this._debutAnalyse || Date.now())) / 1000);
+      return el('p', { className: 'sig-info', textContent: `${this.resultat ? 'Mise à jour de l’analyse' : 'Analyse en cours'}… ${s ? `${s} s` : ''}` });
+    }
+    if (this.erreurAnalyse) {
+      const relancer = el('button', { type: 'button', className: 'sig-bouton sig-bouton--petit', textContent: 'Relancer l’analyse' });
+      relancer.addEventListener('click', () => this.analyser());
+      return el('div', {}, el('p', { className: 'sig-erreur', textContent: `Analyse impossible : ${this.erreurAnalyse}` }), relancer);
+    }
+    return null;
+  }
+
+  _majEtat() {
+    if (!this._zoneEtat) return;
+    const e = this._etatAnalyse();
+    this._zoneEtat.replaceChildren(...(e ? [e] : []));
   }
 
   async exporter() {
@@ -471,7 +510,8 @@ export class OutilCrise {
     if (evt) {
       const exo = evt.mode === 'exercice';
       this.bandeau.className = `sig-crise-bandeau ${exo ? 'sig-crise-bandeau--exercice' : 'sig-crise-bandeau--reel'}`;
-      this.bandeau.textContent = `${exo ? 'EXERCICE' : 'ÉVÉNEMENT RÉEL'} — ${evt.titre} — ${evt.type} — depuis ${heure(evt.debut)}`;
+      const type = evt.type && !evt.titre.includes(evt.type) ? ` — ${evt.type}` : '';
+      this.bandeau.textContent = `${exo ? 'EXERCICE' : 'ÉVÉNEMENT RÉEL'} — ${evt.titre}${type} — depuis ${heure(evt.debut)}`;
     }
     if (evt?.centre) {
       const cercles = evt.zones.map((z, i) => ({ ...z, i })).filter((z) => z.forme === 'cercle');
@@ -587,7 +627,7 @@ export class OutilCrise {
     const description = el('textarea', { className: 'sig-champ', rows: 2, placeholder: 'Description (facultatif)' });
     const demarrer = el('button', { type: 'button', className: 'sig-bouton sig-bouton--actif', textContent: 'Placer l’événement sur la carte' });
     demarrer.addEventListener('click', () => this.nouvelEvenement({
-      titre: titre.value.trim() || `${type.value} — ${heure(new Date().toISOString())}`,
+      titre: titre.value.trim() || type.value,
       type: type.value, mode: reel.checked ? 'reel' : 'exercice', description: description.value.trim(),
     }));
     if (this.enregistres == null) {
@@ -630,9 +670,10 @@ export class OutilCrise {
     }
     sections.push(this._sectionZones());
     this._zoneCompteurs = el('div', {}, this._tableCompteurs());
-    sections.push(el('section', { className: 'sig-section' }, el('h3', { textContent: 'Synthèse' }), this._zoneCompteurs,
-      this.chargement && !this.resultat ? el('p', { className: 'sig-info', textContent: 'Analyse en cours…' }) : null));
-    if (this.message) sections.push(el('p', { className: 'sig-erreur', textContent: this.message }));
+    this._zoneEtat = el('div');
+    this._majEtat();
+    sections.push(el('section', { className: 'sig-section' }, el('h3', { textContent: 'Synthèse' }), this._zoneEtat, this._zoneCompteurs));
+    if (this.message) sections.push(el('p', { className: /impossible/.test(this.message) ? 'sig-erreur' : 'sig-info', textContent: this.message }));
     if (this.resultat) sections.push(...this._listes());
     const exporter = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Exporter les listes (CSV)' });
     exporter.addEventListener('click', () => this.exporter());
@@ -718,7 +759,7 @@ export class OutilCrise {
   }
 
   _tableCompteurs() {
-    if (!this.resultat) return el('p', { className: 'sig-info', textContent: 'Analyse en cours…' });
+    if (!this.resultat) return el('p', { className: 'sig-info', textContent: this.chargement ? 'Les compteurs s’afficheront à la fin de la première analyse.' : 'Pas encore de résultat.' });
     const t = this._compteurs();
     const actifs = this.roles.filter((r) => this.evt.zones.some((z) => z.role === r));
     if (!actifs.length) return el('p', { className: 'sig-info', textContent: 'Aucune zone.' });

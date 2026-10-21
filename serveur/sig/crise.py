@@ -324,7 +324,10 @@ def _candidats_maquettes(cfg: dict, categorie: dict, centre: Point, rayon_max: f
         cfgm = maq_sig.config()
     except maq_sig.ConfigMaquettesInvalide as e:
         return [], [f"maquettes : {e}"]
-    maq_sig.suivi.actualiser(cfg, cfgm)
+    # liste déjà tenue à jour par l'interface : pas de rebalayage du dossier (des secondes au démarrage du
+    # serveur, verrou partagé avec /maquettes) ; seulement si elle n'a encore jamais été construite
+    if not maq_sig.suivi.lignes:
+        maq_sig.suivi.actualiser(cfg, cfgm)
     o, s = vers_wgs84(centre.x - rayon_max, centre.y - rayon_max)
     e, n = vers_wgs84(centre.x + rayon_max, centre.y + rayon_max)
     sortie, anomalies = [], []

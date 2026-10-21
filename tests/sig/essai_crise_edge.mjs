@@ -92,6 +92,19 @@ try {
   log('C synthèse :', await synthese());
   log('C ouvrages :', (await evaluer(`[...document.querySelectorAll('.sig-crise-categorie')].find((d) => d.innerText.startsWith('Ouvrages'))?.innerText`))?.slice(0, 500).replace(/\n/g, ' / '));
   await photo('crise_C_stade_de_france.png');
+  await cliquerTexte('Fermer l’événement');
+  await pause(500);
+
+  // D — simple clic sans glisser (cercle par défaut), directement sur la carte, sans recherche
+  await nouveau('Simple clic');
+  await souris('mousePressed', x, y, 1);
+  await souris('mouseReleased', x, y, 0);
+  await attendre();
+  log('D rayon :', await evaluer(`document.querySelector('.sig-crise-rayon')?.value`));
+  log('D synthèse :', await synthese());
+  log('D état :', await evaluer(`document.querySelector('.sig-crise-table') ? 'tableau affiché' : document.body.innerText.match(/Analyse[^
+]*/)?.[0]`));
+  await photo('crise_D_simple_clic.png');
 } catch (e) {
   log('ERREUR', e.message);
 } finally {
