@@ -105,6 +105,47 @@ try {
   log('D état :', await evaluer(`document.querySelector('.sig-crise-table') ? 'tableau affiché' : document.body.innerText.match(/Analyse[^
 ]*/)?.[0]`));
   await photo('crise_D_simple_clic.png');
+  await cliquerTexte('Fermer l’événement');
+  await pause(800);
+
+  // E — lot C2 : décisions en masse et unitaires, élargissement (changements), note, exports
+  // téléchargements autorisés dans le dossier de sortie (commande du navigateur, pas de la page)
+  const nav = new WebSocket((await (await fetch(`http://127.0.0.1:${CDP}/json/version`)).json()).webSocketDebuggerUrl);
+  await new Promise((r) => nav.addEventListener('open', r));
+  nav.send(JSON.stringify({ id: 1, method: 'Browser.setDownloadBehavior', params: { behavior: 'allow', downloadPath: sortie, eventsEnabled: true } }));
+  await pause(300);
+  await nouveau('Explosion Bastille C2');
+  await chercher('Bastille', 'Station : Bastille');
+  await attendre();
+  const categorie = (debut) => `[...document.querySelectorAll('.sig-crise-categorie')].find((d) => d.querySelector('summary')?.textContent.startsWith(${JSON.stringify(debut)}))`;
+  log('E masse accès :', await evaluer(`(() => { const d = ${categorie('Accès des stations')}; d.open = true; const b = d.querySelector('.sig-crise-masse button'); b.click(); return d.querySelector('summary').textContent; })()`));
+  await pause(500);
+  log('E station :', await evaluer(`(() => { const d = ${categorie('Stations')}; const s = d.querySelector('.sig-crise-decision select'); s.value = 'ferme'; s.dispatchEvent(new Event('change')); return ${categorie('Stations')}.querySelector('summary').textContent; })()`));
+  await pause(500);
+  await cliquerTexte('600 m');
+  await attendre();
+  log('E changements :', await evaluer(`[...document.querySelectorAll('.sig-crise-changements p, .sig-crise-changements li')].map((x) => x.textContent).join(' / ')`));
+  await evaluer(`(() => { const t = [...document.querySelectorAll('textarea')].find((x) => x.placeholder.startsWith('Note')); t.value = 'Préfecture prévenue, périmètre de 600 m demandé'; return true; })()`);
+  await cliquerTexte('Ajouter à la main courante');
+  await pause(1500);
+  log('E main courante :', await evaluer(`[...document.querySelectorAll('.sig-crise-journal li')].slice(0, 8).map((l) => l.textContent).join(' / ')`));
+  log('E sauvegarde :', await evaluer(`[...document.querySelectorAll('.sig-section p')].map((p) => p.textContent).find((t) => t.startsWith('Enregistr'))`));
+  await photo('crise_E_c2.png');
+  // fichiers produits capturés dans la page (Edge sans affichage n'écrit pas les téléchargements de blob)
+  await evaluer(`(() => { window.__fichiers = [];
+    const garder = (a) => { const nom = a.download; fetch(a.href).then((r) => r.blob()).then((b) => new Promise((ok) => { const f = new FileReader(); f.onload = () => ok(f.result); f.readAsDataURL(b); }))
+      .then((u) => window.__fichiers.push({ nom, donnees: u.slice(u.indexOf(',') + 1) })); };
+    HTMLAnchorElement.prototype.click = function () { garder(this); };
+    const envoi = HTMLAnchorElement.prototype.dispatchEvent;   // jsPDF déclenche un faux clic
+    HTMLAnchorElement.prototype.dispatchEvent = function (ev) { if (ev.type === 'click' && this.download) { garder(this); return true; } return envoi.call(this, ev); };
+    return true; })()`);
+  for (const b of ['PDF', 'Excel', 'GeoJSON du périmètre']) { log('E export', b, await cliquerTexte(b)); await pause(5000); }
+  for (const f of (await evaluer('window.__fichiers')) || []) {
+    writeFileSync(join(sortie, f.nom), Buffer.from(f.donnees, 'base64'));
+    log('E fichier', f.nom, Buffer.from(f.donnees, 'base64').length, 'octets');
+  }
+  log('E journal après exports :', await evaluer(`[...document.querySelectorAll('.sig-crise-journal li')].slice(0, 3).map((l) => l.textContent).join(' / ')`));
+  log('E erreurs :', await evaluer(`[...document.querySelectorAll('.sig-erreur')].map((x) => x.textContent).join(' | ')`));
 } catch (e) {
   log('ERREUR', e.message);
 } finally {

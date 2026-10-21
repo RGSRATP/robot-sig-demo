@@ -488,3 +488,14 @@ textarea.sig-champ { resize: vertical; margin: 6px 0; }
 }
 .sig-crise-bandeau--exercice { background: repeating-linear-gradient(135deg, #1971c2 0 14px, #1864ab 14px 28px); }
 .sig-crise-bandeau--reel { background: #c92a2a; }
+/* lot C2 : statuts, changements, main courante */
+.sig-crise-decision { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
+.sig-crise-statut { width: auto; font-size: 12px; padding: 2px 4px; }
+.sig-crise-statut--decide { border-color: var(--sig-bleu); background: var(--sig-bleu-clair); font-weight: 600; }
+.sig-crise-masse { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 6px; padding: 4px 6px; background: var(--sig-fond-2); }
+.sig-crise-hors-zone { margin: 8px 0 2px; font-weight: 600; color: var(--sig-gris); }
+.sig-crise-changements { background: #fff9db; border-left: 3px solid #f2c200; padding: 6px 8px; }
+.sig-crise-changements h3 { margin-top: 0; }
+.sig-crise-journal li { font-size: 12px; border-bottom: 1px solid var(--sig-trait-2); }
+.sig-crise-journal__heure { font-variant-numeric: tabular-nums; color: var(--sig-gris); }
+.sig-crise-format { width: auto; }

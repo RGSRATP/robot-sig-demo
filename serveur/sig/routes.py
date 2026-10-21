@@ -596,3 +596,15 @@ def crise_enregistrer(evt: dict = Body(...), cfg: dict = Depends(_crise)):
         return crise_sig.enregistrer(cfg, evt)
     except crise_sig.ErreurCrise as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+
+@routeur.post("/crise/export/excel")
+def crise_excel(evt: dict = Body(...), cfg: dict = Depends(_crise)):
+    """Classeur Excel de l'événement : synthèse, une feuille par catégorie avec les décisions, main courante."""
+    try:
+        contenu = crise_sig.classeur(cfg, evt)
+    except crise_sig.ErreurCrise as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    titre = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(evt.get("titre") or "evenement"))[:80]
+    return Response(content=contenu, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="crise_{titre}.xlsx"'})

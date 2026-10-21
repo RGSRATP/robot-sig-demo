@@ -343,3 +343,105 @@ def test_recette_scenarios(nom):
         assert rassemblement and rassemblement[0].get("remplacement")
     if nom == "stade_de_france":
         assert any(e["puits"] and e["zone"] for e in _cat(r, "ouvrages")["elements"])
+
+
+# ---------------------------------------------------------------- lot C2 : statuts, main courante, Excel
+
+STATUTS = [{"id": "propose", "libelle": "À décider", "decide": False},
+           {"id": "ferme", "libelle": "Fermé", "decide": True, "barre": True},
+           {"id": "surveille", "libelle": "À surveiller", "decide": True}]
+
+
+def _cfg_c2(tmp_path):
+    cfg = copy.deepcopy(CFG)
+    cfg["crise"]["statuts"] = STATUTS
+    cfg["crise"]["categories"][1]["statuts"] = ["propose", "ferme"]
+    cfg["crise"]["dossier_travail"] = str(tmp_path)
+    return cfg
+
+
+def test_statuts_controles(tmp_path):
+    cfg = _cfg_c2(tmp_path)
+    crise.controler(cfg["crise"], _erreur)
+    i = crise.config_interface(cfg)
+    assert [k["statuts"] for k in i["categories"]][1] == ["propose", "ferme"]
+    assert i["categories"][0]["statuts"] == ["propose", "ferme", "surveille"]
+    assert isinstance(i["auteur_defaut"], str)
+    for modif, motif in [
+        (lambda c: c["statuts"].reverse(), "premier statut"),
+        (lambda c: c["categories"][1].update(statuts=["ferme"]), "commencer"),
+        (lambda c: c["categories"][1].update(statuts=["propose", "inconnu"]), "statuts"),
+        (lambda c: c["statuts"].append(dict(c["statuts"][1])), "double"),
+    ]:
+        c = copy.deepcopy(cfg["crise"])
+        modif(c)
+        with pytest.raises(ValueError, match=motif):
+            crise.controler(c, _erreur)
+
+
+def _evenement():
+    return {"titre": "Explosion Bastille", "type": "Explosion", "mode": "exercice", "auteur": "Raf",
+            "debut": "2026-10-21T09:12:00+02:00", "centre": CENTRE,
+            "zones": [{"role": "evacuation", "rayon_m": 500}, {"role": "vigilance", "rayon_m": 1000}],
+            "statuts": {"acces|id-Accès:1": {"statut": "ferme", "heure": "2026-10-21T09:20:00+02:00", "auteur": "Raf",
+                                             "libelle": "Accès touché"},
+                        "ecoles|Ancienne école": {"statut": "surveille", "heure": "2026-10-21T09:25:00+02:00",
+                                                  "auteur": "Raf", "libelle": "Ancienne école"}},
+            "journal": [{"heure": "2026-10-21T09:12:00+02:00", "auteur": "Raf", "type": "création", "texte": "Événement créé"},
+                        {"heure": "2026-10-21T09:20:00+02:00", "auteur": "Raf", "type": "décision",
+                         "texte": "Accès « Accès touché » : Fermé"}],
+            "versions": [{"heure": "2026-10-21T09:13:00+02:00", "signature": "x", "touches": {"acces": ["id-Accès:1"]}}]}
+
+
+def test_evenement_c2_enregistre_avec_statuts_journal_versions(tmp_path):
+    cfg = _cfg_c2(tmp_path)
+    e = crise.enregistrer(cfg, _evenement())
+    relu = crise.evenement(cfg, e["id"])
+    assert relu["statuts"]["acces|id-Accès:1"]["statut"] == "ferme"
+    assert len(relu["journal"]) == 2 and relu["versions"][0]["touches"]["acces"] == ["id-Accès:1"]
+    assert relu["auteur"] == "Raf"
+    mauvais = _evenement()
+    mauvais["statuts"]["acces|id-Accès:1"]["statut"] = "detruit"
+    with pytest.raises(crise.ErreurCrise, match="statut inconnu"):
+        crise.enregistrer(cfg, mauvais)
+    mauvais = _evenement()
+    mauvais["journal"] = [{"heure": "x"}]
+    with pytest.raises(crise.ErreurCrise, match="journal"):
+        crise.enregistrer(cfg, mauvais)
+
+
+def test_classeur_excel(jeu, tmp_path):
+    from io import BytesIO
+    from openpyxl import load_workbook
+    cfg = _cfg_c2(tmp_path)
+    wb = load_workbook(BytesIO(crise.classeur(cfg, _evenement())))
+    assert wb.sheetnames[0] == "Synthèse" and wb.sheetnames[-1] == "Main courante"
+    synthese = [[c.value for c in l] for l in wb["Synthèse"].iter_rows()]
+    assert synthese[0][0] == "EXERCICE"
+    assert ["Événement", "Explosion Bastille"] == synthese[1][:2]
+    ligne_acces = next(l for l in synthese if l[0] == "Accès")
+    assert ligne_acces[1:4] == [1, 2, 1]          # 1 en évacuation, 2 en vigilance (505 et 565 m), 1 décidé
+    acces = [[c.value for c in l] for l in wb["Accès"].iter_rows()]
+    assert acces[0][7] == "Statut"
+    touche = next(l for l in acces if l[1] == "Accès touché")
+    assert touche[0] == "Évacuation" and touche[7] == "Fermé" and touche[9] == "Raf"
+    ecoles = [[c.value for c in l] for l in wb["Écoles"].iter_rows()]
+    assert any(l[0] == "hors périmètre" and l[1] == "Ancienne école" and l[7] == "À surveiller" for l in ecoles)
+    journal = [[c.value for c in l] for l in wb["Main courante"].iter_rows()]
+    assert journal[2][3] == "Accès « Accès touché » : Fermé"
+
+
+def test_nom_de_feuille_excel():
+    pris = set()
+    nom = crise._nom_feuille("Points d'intervention (PLAI) : très long libellé", pris)
+    assert len(nom) <= 31 and ":" not in nom
+    assert len(crise._nom_feuille("x" * 50, pris)) <= 31
+    assert crise._nom_feuille("Stations", pris) == "Stations" and crise._nom_feuille("Stations", pris) == "Stations 2"
+
+
+def test_route_export_excel(client_test, cfg_test, jeu, monkeypatch, tmp_path):
+    monkeypatch.setitem(cfg_test, "crise", _cfg_c2(tmp_path)["crise"])
+    r = client_test.post("/api/sig/crise/export/excel", json=_evenement())
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert 'crise_Explosion_Bastille.xlsx' in r.headers["content-disposition"]
+    assert client_test.post("/api/sig/crise/export/excel", json={"titre": "x"}).status_code == 422

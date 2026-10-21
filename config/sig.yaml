@@ -715,6 +715,20 @@ crise:
     - { id: evacuation, libelle: "Évacuation", couleur: "#e03131" }
     - { id: fermeture, libelle: "Fermeture / accès interdit", couleur: "#f76707" }
     - { id: vigilance, libelle: "Vigilance / confinement", couleur: "#f2c200" }
+  # Statuts des éléments (lot C2) : le premier est le statut par défaut (à décider) ; decide : décision prise
+  # (pictogramme plein) ; barre : croix sur la carte (fermé, évacué, interrompu). Une catégorie peut restreindre
+  # la liste (clé « statuts » : identifiants) ; sans cette clé, tous les statuts sont proposés.
+  statuts:
+    - { id: propose, libelle: "À décider", decide: false }
+    - { id: ferme, libelle: "Fermé", decide: true, barre: true }
+    - { id: sans_arret, libelle: "Sans arrêt", decide: true }
+    - { id: interrompu, libelle: "Trafic interrompu", decide: true, barre: true }
+    - { id: evacue, libelle: "Évacué", decide: true, barre: true }
+    - { id: confine, libelle: "Confiné", decide: true }
+    - { id: alerte, libelle: "Alerté / informé", decide: true }
+    - { id: surveille, libelle: "À surveiller", decide: true }
+    - { id: ouvert, libelle: "Maintenu ouvert", decide: true }
+    - { id: leve, libelle: "Levé", decide: true }
   categories:
     - id: stations
       libelle: "Stations"
@@ -722,18 +736,21 @@ crise:
       couches: ["Gares et stations IDF (IDFM)"]
       regroupement: "nom_zdc"          # une station = toutes ses lignes
       champ_detail: "res_com"
+      statuts: [propose, ferme, sans_arret, surveille, ouvert, leve]
       propositions: { evacuation: "Fermer la station", fermeture: "Fermer ou passer sans arrêt (à décider)", vigilance: "Surveiller" }
     - id: acces
       libelle: "Accès des stations"
       role: acces
       couches: ["Accès des gares (IDFM)"]
       champ_libelle: "accname"
+      statuts: [propose, ferme, surveille, ouvert, leve]
       propositions: { evacuation: "Fermer l'accès", fermeture: "Fermer l'accès", vigilance: "Surveiller" }
     - id: lignes
       libelle: "Lignes (tronçons touchés)"
       role: lignes
       couches: ["Tracés du réseau ferré IDF (IDFM)"]
       regroupement: "res_com"
+      statuts: [propose, interrompu, surveille, alerte, ouvert, leve]
       propositions: { evacuation: "Interrompre le trafic sur le tronçon", fermeture: "Interruption ou marche à vue (à décider)", vigilance: "Informer l'exploitation" }
     - id: ouvrages
       libelle: "Ouvrages RATP (maquettes)"
@@ -741,6 +758,7 @@ crise:
       dossiers: { "gare": "Gare", "intergare": "Tunnel (intergare)", "ouvrage annexe": "Ouvrage annexe" }
       puits: ["ouvrage annexe"]
       message_puits: "puits : fumées ou gaz peuvent passer vers le souterrain"
+      statuts: [propose, evacue, ferme, surveille, leve]
       propositions: { evacuation: "Évacuer les équipes, ouvrage à sécuriser", fermeture: "Interdire l'accès à l'ouvrage", vigilance: "Surveiller" }
     - id: plai
       libelle: "Points d'intervention (PLAI)"
@@ -751,34 +769,40 @@ crise:
       champ_type: "type"
       type_rassemblement: "rassemblement"
       zones_bloquantes: [evacuation, fermeture]
+      statuts: [propose, ferme, surveille, ouvert, leve]
       propositions: { evacuation: "Dans la zone d'évacuation", fermeture: "Dans la zone de fermeture", vigilance: "Utilisable, à surveiller" }
     - id: ecoles
       libelle: "Établissements scolaires"
       couches: ["Établissements scolaires (Éducation nationale)"]
       champ_libelle: "nom_etablissement"
       champ_detail: "type_etablissement"
+      statuts: [propose, evacue, confine, alerte, surveille, leve]
       propositions: { evacuation: "Évacuer", fermeture: "Évacuer ou confiner (à décider)", vigilance: "Confiner, informer" }
     - id: gaz
       libelle: "Réseaux de gaz"
       role: lignes
       couches: ["Réseau de transport de gaz (NaTran, ODRÉ)", "Réseau GRDF – Massy"]
       regroupement: "@couche"
+      statuts: [propose, alerte, surveille, leve]
       propositions: { evacuation: "Alerter le gestionnaire du réseau", fermeture: "Alerter le gestionnaire du réseau", vigilance: "Informer le gestionnaire" }
     - id: chantiers
       libelle: "Chantiers (Paris)"
       couches: ["Chantiers en cours à Paris"]
       champ_libelle: "chantier_synthese"
       champ_detail: "moa_principal"
+      statuts: [propose, evacue, ferme, alerte, surveille, leve]
       propositions: { evacuation: "Arrêter et évacuer le chantier", fermeture: "Arrêter le chantier", vigilance: "Gêne possible pour les secours" }
     - id: travaux
       libelle: "Travaux perturbants (Paris)"
       couches: ["Travaux perturbants (Paris)"]
       champ_libelle: "voie"
       champ_detail: "impact_circulation"
+      statuts: [propose, alerte, surveille, leve]
       propositions: { evacuation: "Gêne pour les secours", fermeture: "Gêne pour les secours", vigilance: "Gêne possible pour les secours" }
     - id: defibrillateurs
       libelle: "Défibrillateurs RATP"
       couches: ["Défibrillateurs du réseau RATP"]
       champ_libelle: "adr_voie"
       champ_detail: "acc_complt"
+      statuts: [propose, surveille, leve]
       propositions: { vigilance: "Disponible à proximité" }

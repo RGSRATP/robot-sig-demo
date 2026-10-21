@@ -6,6 +6,7 @@
 import { lire } from './api.js';
 import { depuisLambert93, versLambert93 } from './lambert93.js';
 import { el } from './ui.js';
+import { exporterGeojson, exporterPdf, telecharger } from './crise_export.js';
 
 const SOURCE_ZONES = 'sig-crise-zones';
 const SOURCE_ELEMENTS = 'sig-crise-elements';
@@ -41,6 +42,14 @@ function cercle([lon, lat], rayon) {
     anneau.push(depuisLambert93(cx + rayon * Math.sin(a), cy + rayon * Math.cos(a)));
   }
   return anneau;
+}
+
+const CLE_AUTEUR = 'sig-crise-auteur';
+function lireAuteur() {
+  try { return localStorage.getItem(CLE_AUTEUR) || ''; } catch { return ''; }
+}
+function garderAuteur(nom) {
+  try { localStorage.setItem(CLE_AUTEUR, nom); } catch { /* navigateur sans stockage : nom gardé pour la session */ }
 }
 
 function decaler([lon, lat], dx, dy) {
@@ -88,6 +97,12 @@ export class OutilCrise {
     this._rendu = null;
     this.enregistres = null;
     this.message = null;
+    this.statuts = new Map(cfg.statuts.map((x) => [x.id, x]));
+    this.statutDefaut = cfg.statuts[0].id;
+    this.categoriesCfg = new Map(cfg.categories.map((k) => [k.id, k]));
+    this.auteur = lireAuteur() || cfg.auteur_defaut || '';
+    this.changements = null;      // dernier changement de périmètre (ajouts, retraits)
+    this.etatSauvegarde = '';
     this.bandeau = el('div', { className: 'sig-crise-bandeau', hidden: true });
     coque.zone.append(this.bandeau);
   }
@@ -118,9 +133,15 @@ export class OutilCrise {
       layout: { 'circle-sort-key': ['get', 'ordre'] },
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, ['*', ['get', 'rayon'], 0.35], 15, ['get', 'rayon']],
         'circle-opacity': ['case', ['coalesce', ['get', 'secondaire'], false], 0.75, 1], 'circle-stroke-opacity': ['case', ['coalesce', ['get', 'secondaire'], false], 0.6, 1],
-        'circle-color': ['get', 'couleur'],
-        'circle-stroke-color': ['case', ['coalesce', ['get', 'inutilisable'], false], '#000000', '#ffffff'],
-        'circle-stroke-width': ['case', ['coalesce', ['get', 'inutilisable'], false], 3, 1.5] } });
+        'circle-color': ['case', ['coalesce', ['get', 'creux'], false], '#ffffff', ['get', 'couleur']],
+        'circle-stroke-color': ['case', ['coalesce', ['get', 'inutilisable'], false], '#000000',
+          ['coalesce', ['get', 'creux'], false], ['get', 'couleur'], '#1b1e24'],
+        'circle-stroke-width': ['case', ['coalesce', ['get', 'inutilisable'], false], 3, ['coalesce', ['get', 'creux'], false], 2.5, 1.5] } });
+    c.addLayer({ id: 'sig-crise-croix', type: 'symbol', source: SOURCE_ELEMENTS,
+      filter: ['all', ['==', ['geometry-type'], 'Point'], ['has', 'barre']],
+      layout: { 'text-field': '×', 'text-font': police, 'text-size': ['interpolate', ['linear'], ['zoom'], 11, 8, 15, 17],
+        'text-allow-overlap': true, 'text-ignore-placement': true },
+      paint: { 'text-color': '#ffffff', 'text-halo-color': '#1b1e24', 'text-halo-width': 0.8 } });
     c.addLayer({ id: 'sig-crise-etiquettes', type: 'symbol', source: SOURCE_ELEMENTS,
       filter: ['all', ['==', ['geometry-type'], 'Point'], ['has', 'etiquette']],
       layout: { 'text-field': ['get', 'etiquette'], 'text-font': police, 'text-size': 12, 'text-offset': [0, 1.3],
@@ -215,6 +236,7 @@ export class OutilCrise {
     const g = this.glisse;
     if (!g) return;
     this.glisse = null;
+    this._finGeste = Date.now();   // le « click » qui suit le relâchement n'ouvre pas la fiche d'un objet
     if (g.type === 'rayon' && g.nouveau) {
       const bouge = Math.hypot(e.point.x - g.depart.x, e.point.y - g.depart.y);
       if (bouge < CLIC_SANS_GLISSER_PX) this.evt.zones[g.index].rayon_m = this.cfg.rayon_defaut_m;
@@ -226,6 +248,7 @@ export class OutilCrise {
 
   /** Clic sur la carte (carte.js) ; vrai si consommé (placement, polygone, poignée). */
   clic(e) {
+    if (Date.now() - (this._finGeste || 0) < 500) return true;
     if (this.mode === 'polygone') {
       this.polygone.push([e.lngLat.lng, e.lngLat.lat]);
       this._dessiner();
@@ -280,9 +303,12 @@ export class OutilCrise {
   // ------------------------------------------------------------ événement et zones
 
   nouvelEvenement({ titre, type, mode, description }) {
-    this.evt = { id: null, titre, type, mode, description, debut: new Date().toISOString(), centre: null, zones: [] };
+    this.evt = { id: null, titre, type, mode, description, debut: new Date().toISOString(), centre: null, zones: [],
+      statuts: {}, journal: [], versions: [], auteur: this.auteur };
     this.resultat = null;
+    this.changements = null;
     this.historique = [];
+    this._noter('création', `Événement créé : ${type}, ${mode === 'exercice' ? 'exercice' : 'événement réel'}${description ? ` — ${description}` : ''}`);
     this.placer();
   }
 
@@ -365,6 +391,7 @@ export class OutilCrise {
   }
 
   terminer() {
+    if (this._sauvegarde) { clearTimeout(this._sauvegarde); this.enregistrer(); }
     this._requete += 1;   // une analyse en cours est ignorée
     this._abandon?.abort();
     clearInterval(this._minuteur);
@@ -399,6 +426,7 @@ export class OutilCrise {
       const res = await r.json();
       if (n !== this._requete) return;   // une demande plus récente est partie
       this.resultat = res;
+      if (!this.glisse) this._versionner(res);   // pendant le tracé : la version vient au relâchement
     } catch (e) {
       if (n !== this._requete) return;
       const cause = abandon.signal.reason?.message || e.message;
@@ -433,37 +461,73 @@ export class OutilCrise {
     this._zoneEtat.replaceChildren(...(e ? [e] : []));
   }
 
-  async exporter() {
-    try {
-      const r = await poster('crise/analyse', { centre: this.evt.centre, zones: this.evt.zones, titre: this.evt.titre }, { format: 'csv' });
-      const nom = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'crise.csv';
-      const a = el('a', { href: URL.createObjectURL(await r.blob()), download: nom });
-      document.body.append(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-    } catch (e) {
-      this.message = `Export impossible : ${e.message}`;
-      this._rendre();
-    }
+  /** Éléments pour les exports : zone vivante et décision de chaque élément touché ou décidé. */
+  _pourExport() {
+    return (this.resultat?.categories || []).map((k) => {
+      const vus = new Set();
+      const elements = k.elements.filter((e) => this._zone(e) || this._decision(k, e)).map((e) => {
+        vus.add(e.cle);
+        return { libelle: e.libelle, zone: this._zone(e), decision: this._decision(k, e) };
+      });
+      for (const [cle, d] of Object.entries(this.evt.statuts || {})) {   // décidés, au-delà des objets cherchés
+        const [cat, cleE] = [cle.slice(0, cle.indexOf('|')), cle.slice(cle.indexOf('|') + 1)];
+        const st = this.statuts.get(d.statut);
+        if (cat === k.id && !vus.has(cleE) && st?.decide) elements.push({ libelle: d.libelle || cleE, zone: null, decision: { ...d, ...st, statut: d.statut } });
+      }
+      return { libelle: k.libelle, elements };
+    });
   }
 
-  async enregistrer() {
+  async exporter(format) {
+    const evt = this.evt;
     try {
-      const r = await poster('crise/evenements', this.evt);
-      const e = await r.json();
-      this.evt.id = e.id;
-      this.message = `Événement enregistré sur le poste (${heure(e.modifie)}).`;
-      this.enregistres = null;
+      if (format === 'excel') {
+        const r = await poster('crise/export/excel', { ...evt, auteur: this.auteur });
+        const nom = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'crise.xlsx';
+        telecharger(await r.blob(), nom);
+      } else if (format === 'geojson') {
+        exporterGeojson(evt, this.zonesCfg);
+      } else {
+        await exporterPdf({ evt: { ...evt, auteur: this.auteur }, zonesCfg: this.zonesCfg, statuts: this.statuts,
+          categories: this._pourExport(), sources: this.resultat?.sources || [], anomalies: this.resultat?.anomalies || [],
+          avertissement: this.cfg.avertissement, carte: this.carte, format });
+      }
+      this._noter('export', `Export ${format === 'excel' ? 'Excel' : format === 'geojson' ? 'GeoJSON du périmètre' : `PDF ${format.toUpperCase()}`}`);
+      this.message = null;
     } catch (e) {
-      this.message = `Enregistrement impossible : ${e.message}`;
+      this.message = `Export impossible : ${e.message}`;
     }
     this._rendre();
+  }
+
+  /** Enregistrement automatique (une écriture à la fois : le premier enregistrement donne l'identifiant). */
+  enregistrer() {
+    const evt = this.evt;
+    if (!evt) return Promise.resolve();
+    this._file = (this._file || Promise.resolve()).then(async () => {
+      try {
+        const r = await poster('crise/evenements', { ...evt, auteur: this.auteur });
+        const e = await r.json();
+        evt.id = e.id;
+        this.etatSauvegarde = `Enregistré automatiquement à ${new Date(e.modifie).toLocaleTimeString('fr-FR')}`;
+        this.enregistres = null;
+      } catch (e) {
+        this.etatSauvegarde = `Enregistrement impossible : ${e.message}`;
+      }
+      if (this._zoneSauvegarde && this.evt === evt) {
+        this._zoneSauvegarde.textContent = this.etatSauvegarde;
+        this._zoneSauvegarde.className = /impossible/.test(this.etatSauvegarde) ? 'sig-erreur' : 'sig-info';
+      }
+    });
+    return this._file;
   }
 
   async rouvrir(id) {
     try {
       const e = await lire(`crise/evenements/${id}`);
-      this.evt = { ...e, zones: e.zones || [] };
+      this.evt = { ...e, zones: e.zones || [], statuts: e.statuts || {}, journal: e.journal || [], versions: e.versions || [] };
+      this.changements = null;
+      this.etatSauvegarde = `Rouvert (dernier enregistrement : ${heure(e.modifie)})`;
       this.historique = [];
       this.mode = null;
       if (this.evt.centre) { this._cadrer(); this.analyser(); }
@@ -562,7 +626,83 @@ export class OutilCrise {
     if (k.role === 'stations' || k.role === 'maquettes') p.etiquette = e.libelle;
     if (k.role === 'plai' && e.type === 'rassemblement') p.etiquette = `${e.inutilisable ? 'INUTILISABLE — ' : ''}Rassemblement ${e.detail || ''}`.trim();
     if (e.inutilisable) p.inutilisable = true;
+    const d = this._decision(k, e);
+    if (d) { if (d.barre) p.barre = true; } else p.creux = true;   // creux : reste à décider
     return p;
+  }
+
+  /** Statut décidé d'un élément (objet du statut + heure, auteur), ou null s'il reste « à décider ». */
+  _decision(k, e) {
+    const d = this.evt?.statuts?.[`${k.id}|${e.cle}`];
+    const st = d && this.statuts.get(d.statut);
+    return st?.decide ? { ...d, ...st, statut: d.statut } : null;
+  }
+
+  /** Statut choisi pour une liste d'éléments d'une catégorie (journal, carte, enregistrement). */
+  decider(k, elements, statut, precision = '') {
+    const evt = this.evt;
+    evt.statuts ||= {};
+    const maintenant = new Date().toISOString();
+    for (const e of elements) {
+      const cle = `${k.id}|${e.cle}`;
+      if (statut === this.statutDefaut) delete evt.statuts[cle];
+      else evt.statuts[cle] = { statut, heure: maintenant, auteur: this.auteur, libelle: e.libelle };
+    }
+    const lib = this.statuts.get(statut).libelle;
+    this._noter('décision', elements.length === 1
+      ? `${k.libelle} « ${elements[0].libelle} » : ${lib}${precision}`
+      : `${k.libelle} : ${elements.length} éléments passés à « ${lib} »${precision}`);
+    this._dessiner();
+    this._rendre();
+  }
+
+  // ------------------------------------------------------------ main courante et enregistrement automatique
+
+  _noter(type, texte) {
+    if (!this.evt) return;
+    (this.evt.journal ||= []).push({ heure: new Date().toISOString(), auteur: this.auteur, type, texte });
+    this._sauverBientot();
+  }
+
+  _sauverBientot() {
+    clearTimeout(this._sauvegarde);
+    this._sauvegarde = setTimeout(() => this.enregistrer(), 700);
+  }
+
+  /** Mise à jour du périmètre analysée : nouvelle version, changements des éléments touchés, main courante. */
+  _versionner(res) {
+    const evt = this.evt;
+    const signature = JSON.stringify({ centre: evt.centre, zones: evt.zones });
+    const versions = (evt.versions ||= []);
+    const prec = versions[versions.length - 1];
+    if (prec?.signature === signature) return;
+    const touches = {};
+    const noms = {};
+    for (const k of res.categories) {
+      touches[k.id] = k.elements.filter((e) => e.zone).map((e) => e.cle);
+      for (const e of k.elements) noms[`${k.id}|${e.cle}`] = e.libelle;
+    }
+    const description = evt.zones.map((z) => `${this.zonesCfg.get(z.role).libelle} ${z.forme === 'cercle' ? distance(z.rayon_m) : 'polygone'}`).join(', ');
+    const heure_ = new Date().toISOString();
+    if (prec) {
+      const ajouts = [];
+      const retraits = [];
+      for (const k of res.categories) {
+        const avant = new Set(prec.touches?.[k.id] || []);
+        const apres = new Set(touches[k.id]);
+        const plus = [...apres].filter((c) => !avant.has(c));
+        const moins = [...avant].filter((c) => !apres.has(c));
+        if (plus.length) ajouts.push({ categorie: k.libelle, noms: plus.map((c) => noms[`${k.id}|${c}`] || c) });
+        if (moins.length) retraits.push({ categorie: k.libelle, noms: moins.map((c) => noms[`${k.id}|${c}`] || c) });
+      }
+      const resume = [...ajouts.map((a) => `+${a.noms.length} ${a.categorie.toLowerCase()}`),
+        ...retraits.map((x) => `-${x.noms.length} ${x.categorie.toLowerCase()}`)].join(', ');
+      this.changements = { heure: heure_, resume, ajouts, retraits };
+      this._noter('périmètre', `Périmètre modifié : ${description}${resume ? ` (${resume})` : ' (mêmes éléments touchés)'}`);
+    } else {
+      this._noter('placement', `Événement placé (${evt.centre[1].toFixed(6)} N, ${evt.centre[0].toFixed(6)} E) : ${description}`);
+    }
+    versions.push({ heure: heure_, auteur: this.auteur, signature, centre: evt.centre, zones: JSON.parse(JSON.stringify(evt.zones)), touches });
   }
 
   /** Pendant le glissement : seulement les points (géométries des tronçons recalculées au relâchement). */
@@ -616,7 +756,10 @@ export class OutilCrise {
     const sections = [];
     if (!this.evt) sections.push(...this._voletDepart());
     else sections.push(...this._voletEvenement());
+    // la liste reste à la même hauteur après une décision (le volet défile, ou son conteneur)
+    const defilants = [this.panneau, this.panneau.parentElement].filter(Boolean).map((x) => [x, x.scrollTop]);
     this.panneau.replaceChildren(...sections.filter(Boolean));
+    for (const [x, haut] of defilants) x.scrollTop = haut;
   }
 
   _voletDepart() {
@@ -658,11 +801,21 @@ export class OutilCrise {
     const sections = [];
     const terminer = el('button', { type: 'button', className: 'sig-lien', textContent: 'Fermer l’événement' });
     terminer.addEventListener('click', () => this.terminer());
+    const auteur = el('input', { className: 'sig-champ', type: 'text', value: this.auteur, placeholder: 'Votre nom' });
+    auteur.addEventListener('change', () => {
+      this.auteur = auteur.value.trim();
+      evt.auteur = this.auteur;
+      garderAuteur(this.auteur);
+      this._sauverBientot();
+    });
+    this._zoneSauvegarde = el('p', { className: /impossible/.test(this.etatSauvegarde) ? 'sig-erreur' : 'sig-info', textContent: this.etatSauvegarde });
     sections.push(el('section', { className: 'sig-section' },
       el('h3', { textContent: evt.titre }),
       el('p', { className: `sig-crise-mode sig-crise-mode--${evt.mode}`, textContent: evt.mode === 'exercice' ? 'EXERCICE' : 'ÉVÉNEMENT RÉEL' }),
-      el('p', { className: 'sig-info', textContent: `${evt.type} · depuis ${heure(evt.debut)}${evt.id ? ` · enregistré (${evt.id})` : ''}` }),
-      evt.description ? el('p', { textContent: evt.description }) : null, terminer));
+      el('p', { className: 'sig-info', textContent: `${evt.type} · depuis ${heure(evt.debut)}` }),
+      evt.description ? el('p', { textContent: evt.description }) : null,
+      el('label', { className: 'sig-crise-ligne' }, el('span', { textContent: 'Auteur' }), auteur),
+      this._zoneSauvegarde, terminer));
 
     if (!evt.centre || this.mode === 'placement') {
       sections.push(this._sectionLieu());
@@ -673,15 +826,58 @@ export class OutilCrise {
     this._zoneEtat = el('div');
     this._majEtat();
     sections.push(el('section', { className: 'sig-section' }, el('h3', { textContent: 'Synthèse' }), this._zoneEtat, this._zoneCompteurs));
+    sections.push(this._sectionChangements());
     if (this.message) sections.push(el('p', { className: /impossible/.test(this.message) ? 'sig-erreur' : 'sig-info', textContent: this.message }));
     if (this.resultat) sections.push(...this._listes());
-    const exporter = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Exporter les listes (CSV)' });
-    exporter.addEventListener('click', () => this.exporter());
-    const enregistrer = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Enregistrer' });
-    enregistrer.addEventListener('click', () => this.enregistrer());
-    sections.push(el('section', { className: 'sig-section' }, el('div', { className: 'sig-groupe-boutons' }, exporter, enregistrer)));
+    sections.push(this._sectionExports());
+    sections.push(this._sectionJournal());
     if (this.resultat) sections.push(this._sources());
     return sections;
+  }
+
+  _sectionChangements() {
+    const c = this.changements;
+    if (!c) return null;
+    const fermer = el('button', { type: 'button', className: 'sig-lien', textContent: 'Masquer' });
+    fermer.addEventListener('click', () => { this.changements = null; this._rendre(); });
+    const liste = (titre, groupes) => (groupes.length ? el('div', {}, el('strong', { textContent: titre }),
+      el('ul', { className: 'sig-crise-liste' }, ...groupes.map((g) => el('li', {},
+        `${g.categorie} (${g.noms.length}) : ${g.noms.slice(0, 8).join(', ')}${g.noms.length > 8 ? '…' : ''}`)))) : null);
+    return el('section', { className: 'sig-section sig-crise-changements' },
+      el('h3', { textContent: `Changements à ${new Date(c.heure).toLocaleTimeString('fr-FR', { timeStyle: 'short' })}` }),
+      el('p', { textContent: c.resume || 'Mêmes éléments touchés qu’avant la modification.' }),
+      liste('Nouveaux éléments touchés', c.ajouts), liste('Plus touchés', c.retraits), fermer);
+  }
+
+  _sectionExports() {
+    const format = el('select', { className: 'sig-champ sig-crise-format' }, el('option', { value: 'a4', textContent: 'A4' }), el('option', { value: 'a3', textContent: 'A3' }));
+    const bouton = (texte, action) => {
+      const b = el('button', { type: 'button', className: 'sig-bouton', textContent: texte });
+      b.addEventListener('click', async () => { b.disabled = true; try { await action(); } finally { b.disabled = false; } });
+      return b;
+    };
+    return el('section', { className: 'sig-section' }, el('h3', { textContent: 'Exports' }),
+      el('div', { className: 'sig-groupe-boutons' }, bouton('PDF', () => this.exporter(format.value)), format,
+        bouton('Excel', () => this.exporter('excel')), bouton('GeoJSON du périmètre', () => this.exporter('geojson'))),
+      el('p', { className: 'sig-info', textContent: 'PDF : la carte telle qu’affichée, la légende, les chiffres, les décisions et la main courante. Fichiers enregistrés sur ce poste, jamais envoyés.' }));
+  }
+
+  _sectionJournal() {
+    const journal = this.evt.journal || [];
+    const note = el('textarea', { className: 'sig-champ', rows: 2, placeholder: 'Note libre (consigne, appel, constat…)' });
+    const ajouter = el('button', { type: 'button', className: 'sig-bouton sig-bouton--petit', textContent: 'Ajouter à la main courante' });
+    ajouter.addEventListener('click', () => {
+      if (!note.value.trim()) return;
+      this._noter('note', note.value.trim());
+      this._rendre();
+    });
+    const ligne = (j) => el('li', {}, el('span', { className: 'sig-crise-journal__heure', textContent: new Date(j.heure).toLocaleTimeString('fr-FR', { timeStyle: 'short' }) }),
+      ` ${j.texte}`, j.auteur ? el('span', { className: 'sig-info', textContent: ` — ${j.auteur}` }) : null);
+    const recents = journal.slice(-8).reverse();
+    return el('section', { className: 'sig-section' }, el('h3', { textContent: `Main courante (${journal.length})` }), note, ajouter,
+      el('ul', { className: 'sig-crise-liste sig-crise-journal' }, ...recents.map(ligne)),
+      journal.length > recents.length ? el('details', {}, el('summary', {}, 'Toute la main courante'),
+        el('ul', { className: 'sig-crise-liste sig-crise-journal' }, ...[...journal].reverse().map(ligne))) : null);
   }
 
   _sectionLieu() {
@@ -776,18 +972,41 @@ export class OutilCrise {
     return this.resultat.categories.map((k) => {
       const touches = k.elements.filter((e) => this._zone(e))
         .sort((a, b) => this.zonesCfg.get(this._zone(a)).rang - this.zonesCfg.get(this._zone(b)).rang || a.distance_m - b.distance_m);
-      if (!touches.length) return null;
+      const horsZone = k.elements.filter((e) => !this._zone(e) && this._decision(k, e));
+      if (!touches.length && !horsZone.length) return null;
       const items = touches.slice(0, MAX_LISTE).map((e) => this._item(k, e));
       const reste = touches.length - items.length;
-      return el('details', { className: 'sig-crise-categorie', open: ['stations', 'plai', 'maquettes', 'lignes'].includes(k.role) },
-        el('summary', {}, `${k.libelle} (${touches.length})`),
+      const decides = touches.filter((e) => this._decision(k, e)).length;
+      const ouvert = this._ouvertes?.has(k.id) ?? ['stations', 'plai', 'maquettes', 'lignes'].includes(k.role);
+      const d = el('details', { className: 'sig-crise-categorie', open: ouvert },
+        el('summary', {}, `${k.libelle} (${touches.length}${decides ? ` · ${decides} décidé(s)` : ''})`),
+        touches.length ? this._actionMasse(k, touches) : null,
         el('ul', { className: 'sig-crise-elements' }, ...items),
-        reste > 0 ? el('p', { className: 'sig-info', textContent: `… et ${reste} autre(s) : voir l’export CSV.` }) : null);
+        reste > 0 ? el('p', { className: 'sig-info', textContent: `… et ${reste} autre(s) : voir l’export Excel.` }) : null,
+        horsZone.length ? el('div', {}, el('p', { className: 'sig-crise-hors-zone', textContent: `Décidés, hors zone désormais (${horsZone.length})` }),
+          el('ul', { className: 'sig-crise-elements' }, ...horsZone.map((e) => this._item(k, e)))) : null);
+      d.addEventListener('toggle', () => { (this._ouvertes ||= new Map()).set(k.id, d.open); });
+      return d;
     });
   }
 
+  /** « Pour la zone … : statut … » appliqué à tous les éléments de la catégorie dans cette zone. */
+  _actionMasse(k, touches) {
+    const roles = this.roles.filter((r) => touches.some((e) => this._zone(e) === r));
+    const zone = el('select', { className: 'sig-champ sig-crise-statut' }, ...roles.map((r) => el('option', { value: r, textContent: this.zonesCfg.get(r).libelle })));
+    const ids = this.categoriesCfg.get(k.id)?.statuts || [...this.statuts.keys()];
+    const statut = el('select', { className: 'sig-champ sig-crise-statut' }, ...ids.filter((i) => i !== this.statutDefaut).map((i) => el('option', { value: i, textContent: this.statuts.get(i).libelle })));
+    const appliquer = el('button', { type: 'button', className: 'sig-bouton sig-bouton--petit', textContent: 'Appliquer' });
+    appliquer.addEventListener('click', () => {
+      const cibles = touches.filter((e) => this._zone(e) === zone.value);
+      if (cibles.length) this.decider(k, cibles, statut.value, ` (zone ${this.zonesCfg.get(zone.value).libelle})`);
+    });
+    return el('div', { className: 'sig-crise-masse' }, el('span', { className: 'sig-info', textContent: 'Tous ceux de la zone' }), zone, statut, appliquer);
+  }
+
   _item(k, e) {
-    const zc = this.zonesCfg.get(this._zone(e));
+    const role = this._zone(e);
+    const zc = role ? this.zonesCfg.get(role) : { couleur: '#adb5bd', libelle: 'hors périmètre' };
     const nom = el('button', { type: 'button', className: 'sig-lien sig-crise-nom', textContent: e.libelle });
     nom.addEventListener('click', () => this._ouvrir(e));
     const lignes = [
@@ -797,6 +1016,13 @@ export class OutilCrise {
       e.cause ? el('div', { className: 'sig-info', textContent: `Touchée ${e.cause}` }) : null,
       e.proposition ? el('div', { className: `sig-crise-proposition${e.inutilisable || e.puits ? ' sig-crise-proposition--alerte' : ''}`, textContent: `→ ${e.proposition}` }) : null,
     ];
+    const ids = this.categoriesCfg.get(k.id)?.statuts || [...this.statuts.keys()];
+    const d = this.evt.statuts?.[`${k.id}|${e.cle}`];
+    const choix = el('select', { className: `sig-champ sig-crise-statut${d ? ' sig-crise-statut--decide' : ''}`, title: 'Statut décidé' },
+      ...ids.map((i) => el('option', { value: i, textContent: this.statuts.get(i).libelle, selected: i === (d?.statut || this.statutDefaut) })));
+    choix.addEventListener('change', () => this.decider(k, [e], choix.value));
+    lignes.push(el('div', { className: 'sig-crise-decision' }, choix,
+      d ? el('span', { className: 'sig-info', textContent: ` ${new Date(d.heure).toLocaleTimeString('fr-FR', { timeStyle: 'short' })}${d.auteur ? ` · ${d.auteur}` : ''}` }) : null));
     if (e.remplacement) {
       const voir = el('button', { type: 'button', className: 'sig-lien', textContent: 'Voir le point proposé' });
       voir.addEventListener('click', () => this.carte.flyTo({ center: e.remplacement.position, zoom: 17, duration: 800 }));

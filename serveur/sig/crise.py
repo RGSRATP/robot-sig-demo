@@ -19,6 +19,8 @@ Ne jamais bloquer : une couche absente ou illisible devient une anomalie, les au
 """
 from __future__ import annotations
 
+import getpass
+import io
 import json
 import math
 import re
@@ -43,6 +45,11 @@ DIRECTIONS = ("N", "NE", "E", "SE", "S", "SO", "O", "NO")
 CACHE_CANDIDATS = 16       # points d'événement gardés en mémoire (technique)
 SEGMENTS_CERCLE = 64       # quarts de cercle des zones circulaires (écart au vrai cercle < 8 cm à 1 km)
 DECIMALES_WGS84 = 6        # ~10 cm
+STATUTS_DEFAUT = [{"id": "propose", "libelle": "À décider", "decide": False},
+                  {"id": "ferme", "libelle": "Fermé", "decide": True, "barre": True},
+                  {"id": "surveille", "libelle": "À surveiller", "decide": True},
+                  {"id": "leve", "libelle": "Levé", "decide": True}]
+MAX_JOURNAL = 5000         # entrées de main courante gardées (technique)
 
 _verrou = threading.Lock()
 _objets_couches: dict = {}                    # (id couche, version) -> objets en Lambert 93
@@ -117,6 +124,20 @@ def controler(c, erreur) -> None:
     roles = [k.get("role", "points") for k in cats]
     if "acces" in roles and "stations" not in roles:
         raise erreur("« crise.categories » : une catégorie « acces » demande une catégorie « stations »")
+    statuts = c.get("statuts", STATUTS_DEFAUT)
+    if not (isinstance(statuts, list) and statuts and all(isinstance(x, dict) and isinstance(x.get("id"), str)
+                                                          and isinstance(x.get("libelle"), str) for x in statuts)):
+        raise erreur("« crise.statuts » doit être une liste de statuts (id, libelle ; decide, barre facultatifs)")
+    ids_statuts = [x["id"] for x in statuts]
+    if len(set(ids_statuts)) != len(ids_statuts):
+        raise erreur("« crise.statuts » : identifiant en double")
+    if statuts[0].get("decide"):
+        raise erreur("« crise.statuts » : le premier statut est celui « à décider » (decide: false)")
+    for k in cats:
+        if "statuts" in k and not (isinstance(k["statuts"], list) and k["statuts"] and k["statuts"][0] == ids_statuts[0]
+                                   and all(x in ids_statuts for x in k["statuts"])):
+            raise erreur(f"« crise.categories » {k['id']} : « statuts » doit commencer par « {ids_statuts[0]} » "
+                         f"et ne citer que des statuts déclarés ({', '.join(ids_statuts)})")
 
 
 def config_interface(cfg: dict) -> dict | None:
@@ -128,9 +149,24 @@ def config_interface(cfg: dict) -> dict | None:
         "rayon_max_m": c["rayon_max_m"], "rayon_defaut_m": c["rayon_defaut_m"], "pas_m": c["pas_m"],
         "raccourcis_m": c["raccourcis_m"], "types": c["types"], "zones": c["zones"],
         "categories": [{"id": k["id"], "libelle": k["libelle"], "role": k.get("role", "points"),
-                        "propositions": k.get("propositions", {})} for k in c["categories"]],
+                        "propositions": k.get("propositions", {}),
+                        "statuts": k.get("statuts") or [x["id"] for x in statuts(cfg)]} for k in c["categories"]],
+        "statuts": statuts(cfg),
+        "auteur_defaut": auteur_poste(),
         "avertissement": c.get("avertissement", ""),
     }
+
+
+def statuts(cfg: dict) -> list[dict]:
+    return cfg["crise"].get("statuts") or STATUTS_DEFAUT
+
+
+def auteur_poste() -> str:
+    """Nom de session Windows du poste : auteur par défaut des décisions (modifiable dans l'interface)."""
+    try:
+        return getpass.getuser()
+    except Exception:   # session sans nom (service) : l'utilisateur saisit le sien
+        return ""
 
 
 # ---------------------------------------------------------------- géométrie
@@ -687,8 +723,20 @@ def enregistrer(cfg: dict, evt: dict) -> dict:
     id_ = evt.get("id") or datetime.now().strftime("%Y%m%d-%H%M%S")
     if not _ID.match(id_):
         raise ErreurCrise("identifiant d'événement invalide")
-    garde = {k: evt.get(k) for k in ("titre", "type", "mode", "debut", "description", "centre", "zones")}
-    garde.update({"id": id_, "modifie": datetime.now().isoformat(timespec="seconds")})
+    ids_statuts = {x["id"] for x in statuts(cfg)}
+    decisions = evt.get("statuts") or {}
+    if not isinstance(decisions, dict) or any(not isinstance(v, dict) or v.get("statut") not in ids_statuts
+                                              for v in decisions.values()):
+        raise ErreurCrise(f"« statuts » : statut inconnu (attendu : {', '.join(sorted(ids_statuts))})")
+    journal = evt.get("journal") or []
+    if not isinstance(journal, list) or any(not isinstance(j, dict) or not isinstance(j.get("texte"), str) for j in journal):
+        raise ErreurCrise("« journal » : liste d'entrées {heure, auteur, type, texte} attendue")
+    versions = evt.get("versions") or []
+    if not isinstance(versions, list):
+        raise ErreurCrise("« versions » : liste attendue")
+    garde = {k: evt.get(k) for k in ("titre", "type", "mode", "debut", "description", "centre", "zones", "auteur")}
+    garde.update({"statuts": decisions, "journal": journal[-MAX_JOURNAL:], "versions": versions,
+                  "id": id_, "modifie": datetime.now().isoformat(timespec="seconds")})
     d = dossier_evenements(cfg)
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / f"{id_}.json.tmp"
@@ -724,3 +772,145 @@ def reinitialiser() -> None:
     with _verrou:
         _objets_couches.clear()
         _candidats.clear()
+
+
+# ---------------------------------------------------------------- export Excel (lot C2)
+
+def _nom_feuille(texte: str, pris: set[str]) -> str:
+    """Nom de feuille Excel : 31 caractères au plus, sans caractère interdit, unique."""
+    base = re.sub(r"[\[\]:*?/\\]", " ", texte).strip()[:31] or "Feuille"
+    nom, i = base, 2
+    while nom.lower() in pris:
+        nom = f"{base[:28]} {i}"
+        i += 1
+    pris.add(nom.lower())
+    return nom
+
+
+def _heure(iso: str | None) -> str:
+    if not iso:
+        return ""
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return iso
+
+
+def classeur(cfg: dict, evt: dict) -> bytes:
+    """Classeur de l'événement : synthèse, une feuille par catégorie (éléments touchés et décisions), main courante.
+
+    Les éléments sont recalculés à partir du point et des zones de l'événement ; les décisions (statuts) viennent
+    de l'événement. Un élément décidé qui n'est plus dans le périmètre est gardé, signalé « hors périmètre ».
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    if not evt.get("centre"):
+        raise ErreurCrise("événement sans point : rien à exporter")
+    r = analyser(cfg, evt["centre"], evt.get("zones") or [])
+    c = cfg["crise"]
+    zones = {z["id"]: z for z in c["zones"]}
+    libelles_statuts = {x["id"]: x["libelle"] for x in statuts(cfg)}
+    defaut = statuts(cfg)[0]["id"]
+    decisions = evt.get("statuts") or {}
+    gras = Font(bold=True)
+    blanc = Font(bold=True, color="FFFFFF")
+    entete = PatternFill("solid", fgColor="0A0082")
+
+    def remplir(ws, lignes, largeurs):
+        for i, ligne in enumerate(lignes, 1):
+            ws.append(ligne)
+            if i == 1:
+                for cell in ws[1]:
+                    cell.font, cell.fill = blanc, entete
+        for i, l in enumerate(largeurs, 1):
+            ws.column_dimensions[get_column_letter(i)].width = l
+        ws.freeze_panes = "A2"
+        if len(lignes) > 1:
+            ws.auto_filter.ref = ws.dimensions
+
+    def teinter(cell, role):
+        z = zones.get(role)
+        if z:
+            cell.fill = PatternFill("solid", fgColor=z["couleur"].lstrip("#").upper())
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Synthèse"
+    exercice = evt.get("mode") == "exercice"
+    ws.append(["EXERCICE" if exercice else "ÉVÉNEMENT RÉEL"])
+    ws["A1"].font = Font(bold=True, size=14, color="1971C2" if exercice else "C92A2A")
+    for k, v in [("Événement", evt.get("titre")), ("Type", evt.get("type")), ("Début", _heure(evt.get("debut"))),
+                 ("Description", evt.get("description")), ("Auteur", evt.get("auteur")),
+                 ("Point (WGS84)", f"{r['centre']['wgs84'][1]:.6f} N, {r['centre']['wgs84'][0]:.6f} E"),
+                 ("Point (Lambert 93)", f"X {r['centre']['l93'][0]:.2f}  Y {r['centre']['l93'][1]:.2f}"),
+                 ("Export", datetime.now().strftime("%d/%m/%Y %H:%M"))]:
+        ws.append([k, v])
+        ws.cell(ws.max_row, 1).font = gras
+    ws.append([])
+    ws.append(["Zones"])
+    ws.cell(ws.max_row, 1).font = gras
+    for z in r["zones"]:
+        ws.append([zones[z["role"]]["libelle"], f"cercle de {z['rayon_m']:g} m" if z["forme"] == "cercle"
+                   else f"polygone de {z['surface_m2'] / 1e4:.2f} ha"])
+        teinter(ws.cell(ws.max_row, 1), z["role"])
+    ws.append([])
+    actifs = [z["id"] for z in c["zones"] if any(x["role"] == z["id"] for x in r["zones"])]
+    ws.append(["Catégorie", *[zones[i]["libelle"] for i in actifs], "Décidés"])
+    for cell in ws[ws.max_row]:
+        cell.font = gras
+    for k in r["categories"]:
+        n = [sum(1 for e in k["elements"] if e["zone"] == i) for i in actifs]
+        decides = sum(1 for e in k["elements"] if e["zone"]
+                      and (decisions.get(f"{k['id']}|{e['cle']}") or {}).get("statut", defaut) != defaut)
+        ws.append([k["libelle"], *n, decides])
+    ws.append([])
+    ws.append(["Avertissement", c.get("avertissement", "")])
+    ws.append(["Sources", "; ".join(sorted({f"{s['libelle']} ({_heure(s['date'])})" if s.get("date") else s["libelle"]
+                                            for s in r["sources"]}))])
+    for a in r["anomalies"]:
+        ws.append(["Anomalie", a])
+    ws.column_dimensions["A"].width = 30
+    for col in "BCDEF":
+        ws.column_dimensions[col].width = 22
+
+    pris = {"synthèse", "main courante"}
+    for k in r["categories"]:
+        lignes = [["Zone", "Élément", "Détail", "Cause", "Distance (m)", "Direction", "Proposition",
+                   "Statut", "Décidé le", "Par", "Longitude", "Latitude"]]
+        roles_lignes = []
+        vus = set()
+        for e in k["elements"]:
+            d = decisions.get(f"{k['id']}|{e['cle']}") or {}
+            if not e["zone"] and not d:
+                continue
+            vus.add(e["cle"])
+            lignes.append([zones[e["zone"]]["libelle"] if e["zone"] else "hors périmètre", e["libelle"], e.get("detail"),
+                           e.get("cause"), e["distance_m"], e["direction"], e.get("proposition"),
+                           libelles_statuts.get(d.get("statut", defaut), d.get("statut")), _heure(d.get("heure")),
+                           d.get("auteur"), e["position"][0], e["position"][1]])
+            roles_lignes.append(e["zone"])
+        # décisions sur des éléments sortis des candidats (point déplacé au-delà de rayon_max)
+        for cle, d in decisions.items():
+            cat, _, cle_e = cle.partition("|")
+            if cat == k["id"] and cle_e not in vus:
+                lignes.append(["hors périmètre", d.get("libelle") or cle_e, None, None, None, None, None,
+                               libelles_statuts.get(d.get("statut"), d.get("statut")), _heure(d.get("heure")),
+                               d.get("auteur"), None, None])
+                roles_lignes.append(None)
+        if len(lignes) == 1:
+            continue
+        f = wb.create_sheet(_nom_feuille(k["libelle"], pris))
+        remplir(f, lignes, [16, 40, 30, 34, 12, 10, 40, 18, 16, 14, 11, 11])
+        for i, role in enumerate(roles_lignes, 2):
+            teinter(f.cell(i, 1), role)
+            f.cell(i, 2).alignment = Alignment(wrap_text=True, vertical="top")
+
+    j = wb.create_sheet("Main courante")
+    remplir(j, [["Heure", "Auteur", "Action", "Texte"]]
+            + [[_heure(x.get("heure")), x.get("auteur"), x.get("type"), x.get("texte")] for x in evt.get("journal") or []],
+            [17, 16, 14, 100])
+    sortie = io.BytesIO()
+    wb.save(sortie)
+    return sortie.getvalue()

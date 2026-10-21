@@ -115,6 +115,15 @@ S'y ajoutent :
 - un recalcul en moins de 2 s pour 1 km dans Paris ;
 - `pytest`.
 
+### Lot C2 — Carte de gestion de crise : décider et tracer *(ajouté le 2026-10-21)*
+
+- **Statut de chaque élément** : proposé (défaut), fermé, sans arrêt, évacué, confiné, à surveiller, ouvert, levé (liste paramétrable, par catégorie) ; actions en masse par zone ; statut visible sur la carte (creux : à décider, plein : décidé, croix : fermé ou évacué).
+- **Main courante** : journal horodaté de toutes les actions avec leur auteur (session Windows par défaut, modifiable), notes libres ; enregistrement automatique de l'événement à chaque action.
+- **Évolution du périmètre** : une version par modification ; changements affichés (« +3 accès, +1 école ») et inscrits au journal ; un élément décidé sorti du périmètre garde son statut (« hors zone désormais »).
+- **Exports** (fichiers remis à l'utilisateur, jamais envoyés) : PDF A4 ou A3 (carte affichée, légende, chiffres par zone, bandeau réel ou exercice, sources et dates, page de synthèse des décisions et de la main courante) ; Excel (synthèse, une feuille par catégorie avec les statuts, main courante) ; GeoJSON du périmètre.
+
+**Recette** : scénario Bastille dans l'interface — élargissement de 500 m à 600 m avec les changements affichés, accès de la zone d'évacuation fermés en masse, note au journal, exports PDF, Excel et GeoJSON relus ; tests des statuts, du journal, des versions et des exports.
+
 ## 5. Principes
 
 - Ne jamais bloquer, toujours tracer : une donnée défectueuse est signalée, les autres continuent de s'afficher.
