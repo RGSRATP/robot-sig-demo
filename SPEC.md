@@ -80,6 +80,41 @@ Géoplateforme IGN, appelée par le navigateur à travers le proxy du poste :
 ### Lot 5 — Fonctionnalités spécifiques
 À définir avec l'utilisateur après le lot 4.
 
+### Lot C1 — Carte de gestion de crise : périmètre et analyse *(ajouté le 2026-10-21)*
+
+Cahier des charges complet : `SIG_Viewer/CDC_Carte_Gestion_Crise.md` (hors dépôt, lots C1 à C4). Cas d'usage n°1 de l'atelier InfraGéo. POC local ; utilisateur : la cellule de crise. L'outil aide à décider, il ne décide pas.
+
+- **Événement** : type (liste paramétrable), titre, heure, description, mode réel ou **exercice** (bandeau visible). Localisation par clic sur la carte, recherche d'une station ou d'un accès, ou coordonnées.
+- **Périmètre au rayon libre**, intuitif :
+  - clic puis glisser pour tracer le cercle, rayon affiché en direct ;
+  - poignée sur le bord pour ajuster, centre déplaçable, saisie au clavier ;
+  - raccourcis 500 m, 600 m et 1 km (paramétrables) ;
+  - plusieurs cercles concentriques, polygone dessiné ;
+  - rôles de zone : évacuation (rouge), fermeture (orange), vigilance (jaune), paramétrables.
+- **Cercles calculés en Lambert 93**, jamais dans la projection de la carte.
+- **Analyse par zone** (la zone la plus grave l'emporte) :
+  - stations (touchées par leur point ou par un de leurs accès, avec la cause) et accès ;
+  - tronçons de ligne ;
+  - maquettes et ouvrages annexes (signalés comme puits) ;
+  - écoles, chantiers et travaux, défibrillateurs, réseaux de gaz, points PLAI ;
+  - un point de rassemblement en zone rouge ou orange est déclaré inutilisable, et le plus proche hors zone est proposé.
+
+  Chaque élément donne sa distance, sa direction, sa source et la date de sa donnée. Les compteurs se mettent à jour pendant le glissement.
+- **Mise en évidence** : zones en aplats, extérieur assombri, pictogrammes d'état, lignes touchées, légende de crise, vue « Crise ».
+- **Listes** par zone et par catégorie, avec un export CSV.
+- **Configuration** : section `crise` de `config/sig.yaml` (types, rayons, rôles, couleurs, couches analysées et leur catégorie, règles de proposition).
+
+**Recette** : trois scénarios vérifiés à la main sur la carte.
+- **A — Place de la Bastille** : stations, accès, lignes, écoles, chantiers.
+- **B — Place de la République** : points PLAI ; point de rassemblement inutilisable et remplacement proposé.
+- **C — Gare Stade de France (L15)** : gare 64SDF, tunnels 3364I et 6465I, ouvrage annexe 6301P.
+
+S'y ajoutent :
+- un test de distance (accès à 495 m dans le cercle de 500 m, à 505 m hors du cercle) ;
+- une couche injoignable signalée sans bloquer l'analyse ;
+- un recalcul en moins de 2 s pour 1 km dans Paris ;
+- `pytest`.
+
 ## 5. Principes
 
 - Ne jamais bloquer, toujours tracer : une donnée défectueuse est signalée, les autres continuent de s'afficher.
