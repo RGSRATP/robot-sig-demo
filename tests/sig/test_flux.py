@@ -44,6 +44,19 @@ def test_wfs_pagination_emprise_et_systeme(cfg_test):
     assert p[0]["SRSNAME"] == "EPSG:2154" and p[0]["OUTPUTFORMAT"] == "application/json"
 
 
+def test_wfs_filtre_cql_avec_emprise_dans_le_filtre(cfg_test):
+    """GeoServer refuse BBOX et CQL_FILTER ensemble : l'emprise passe dans le filtre (longitude, latitude)."""
+    serveur = ff.FauxFlux()
+    service = _wfs(filtre_cql="nature IN ('Police','Gendarmerie')")
+    _couche(cfg_test, service, "WFS", serveur)
+    q = dict(serveur.requetes[0].url.params)
+    assert "BBOX" not in q
+    assert q["CQL_FILTER"] == "(nature IN ('Police','Gendarmerie')) AND BBOX(geometrie,2.2,48.69,2.32,48.76,'EPSG:4326')"
+    assert flux.identifiant_wfs(service) != flux.identifiant_wfs(_wfs(filtre_cql="nature = 'Caserne de pompiers'"))
+    _couche(cfg_test, _wfs(filtre_cql="x = 1", champ_geometrie="the_geom"), "WFS", serveur, forcer=True)
+    assert "BBOX(the_geom," in dict(serveur.requetes[-1].url.params)["CQL_FILTER"]
+
+
 def test_wfs_format_de_sortie_declare_mapserver(cfg_test):
     serveur = ff.FauxFlux()
     _couche(cfg_test, _wfs(format_sortie="application/json; subtype=geojson"), "WFS", serveur)

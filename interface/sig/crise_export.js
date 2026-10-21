@@ -153,6 +153,17 @@ export async function exporterPdf(d) {
     doc.text(decides ? String(decides) : '—', x + 44 * echelle + col * roles.length, y);
     y += 4.4 * echelle;
   }
+  if (d.secours?.length) {
+    y += 3;
+    titre('Secours les plus proches');
+    taille(8);
+    for (const sec of d.secours) {
+      doc.setFillColor(...rgb(sec.couleur));
+      doc.circle(M + lI + 6.5, y - 1.2, 1.3, 'F');
+      doc.text(doc.splitTextToSize(`${sec.categorie} : ${sec.libelle} — ${nf(sec.distance_m)} m ${sec.direction}`, colonne - 5)[0], M + lI + 9, y);
+      y += 4.4 * echelle;
+    }
+  }
   y += 3;
   titre('Décisions');
   taille(8);

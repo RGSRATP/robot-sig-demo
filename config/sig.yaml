@@ -538,6 +538,29 @@ services_wfs:
     attribution: "Airparif (ODbL)"
     visible: false
 
+  # Secours (lot C2, 2026-10-21) : sites de la BD TOPO filtrés par nature (« filtre_cql » : filtre CQL GeoServer,
+  # combiné à l'emprise ; « champ_geometrie » : nom du champ géométrique, défaut « geometrie »).
+  - libelle: "Postes de police et gendarmeries (BD TOPO, IGN)"
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "BDTOPO_V3:zone_d_activite_ou_d_interet"
+    filtre_cql: "nature IN ('Police','Gendarmerie')"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    champ_libelle: "toponyme"
+    cache_heures: 168
+    attribution: "IGN BD TOPO"
+    style: { couleur: "#1c3f94" }
+    visible: false
+  - libelle: "Casernes de pompiers (BD TOPO, IGN)"
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "BDTOPO_V3:zone_d_activite_ou_d_interet"
+    filtre_cql: "nature = 'Caserne de pompiers'"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    champ_libelle: "toponyme"
+    cache_heures: 168
+    attribution: "IGN BD TOPO"
+    style: { couleur: "#d9480f" }
+    visible: false
+
 # GeoJSON par URL (catalogue Open Data, 15/10/2026) : exports des API Explore (Opendatasoft) ou fichiers publiés.
 # Clés : libelle, url ; facultatives : systeme (défaut EPSG:4326, norme GeoJSON), emprise_wgs84 (filtre après lecture),
 # max_mo (défaut 50), max_objets, cache_heures, export, attribution, style, visible, champ_libelle.
@@ -737,7 +760,7 @@ crise:
       regroupement: "nom_zdc"          # une station = toutes ses lignes
       champ_detail: "res_com"
       statuts: [propose, ferme, sans_arret, surveille, ouvert, leve]
-      propositions: { evacuation: "Fermer la station", fermeture: "Fermer ou passer sans arrêt (à décider)", vigilance: "Surveiller" }
+      propositions: { evacuation: "Fermer la station", fermeture: "Fermer la station (par défaut ; « sans arrêt » possible sur décision)", vigilance: "Surveiller" }
     - id: acces
       libelle: "Accès des stations"
       role: acces
@@ -771,6 +794,28 @@ crise:
       zones_bloquantes: [evacuation, fermeture]
       statuts: [propose, ferme, surveille, ouvert, leve]
       propositions: { evacuation: "Dans la zone d'évacuation", fermeture: "Dans la zone de fermeture", vigilance: "Utilisable, à surveiller" }
+    - id: police
+      libelle: "Police (les plus proches)"
+      role: secours
+      couches: ["Postes de police et gendarmeries (BD TOPO, IGN)"]
+      champ_libelle: "toponyme"
+      champ_detail: "nature_detaillee"
+      nombre: 2                        # sites les plus proches montrés, reliés au point par une ligne
+      rayon_recherche_m: 15000         # cherchés plus loin que les autres catégories
+      couleur: "#1c3f94"
+      statuts: [propose, alerte, leve]
+      propositions: { evacuation: "Dans la zone d'évacuation : moyens à replier", fermeture: "Dans la zone de fermeture" }
+    - id: pompiers
+      libelle: "Pompiers (les plus proches)"
+      role: secours
+      couches: ["Casernes de pompiers (BD TOPO, IGN)"]
+      champ_libelle: "toponyme"
+      champ_detail: "nature_detaillee"
+      nombre: 2
+      rayon_recherche_m: 15000
+      couleur: "#d9480f"
+      statuts: [propose, alerte, leve]
+      propositions: { evacuation: "Dans la zone d'évacuation : moyens à replier", fermeture: "Dans la zone de fermeture" }
     - id: ecoles
       libelle: "Établissements scolaires"
       couches: ["Établissements scolaires (Éducation nationale)"]

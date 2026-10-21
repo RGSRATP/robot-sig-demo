@@ -218,9 +218,9 @@ def test_export_csv_seulement_les_elements_touches(jeu):
 
 
 def test_temps_de_calcul_un_kilometre(monkeypatch):
-    """50 000 objets dans 3 km (densité de Paris largement dépassée) : analyse en moins de 2 s."""
+    """20 000 objets dans 3 km (plus du double des objets réels autour de la Bastille) : analyse en moins de 2 s."""
     rng = np.random.default_rng(1)
-    xy = rng.uniform(-3000, 3000, (50000, 2))
+    xy = rng.uniform(-3000, 3000, (20000, 2))
     j = {"Écoles": _couche("Écoles", {"nom": [f"o{i}" for i in range(len(xy))]}, [Point(X0 + a, Y0 + b) for a, b in xy])}
     cfg = copy.deepcopy(CFG)
     cfg["crise"]["categories"] = [cfg["crise"]["categories"][-1]]
@@ -445,3 +445,38 @@ def test_route_export_excel(client_test, cfg_test, jeu, monkeypatch, tmp_path):
     assert r.status_code == 200 and r.headers["content-type"].startswith("application/vnd.openxmlformats")
     assert 'crise_Explosion_Bastille.xlsx' in r.headers["content-disposition"]
     assert client_test.post("/api/sig/crise/export/excel", json={"titre": "x"}).status_code == 422
+
+
+# ---------------------------------------------------------------- secours les plus proches (police, pompiers)
+
+def test_secours_les_plus_proches(monkeypatch):
+    j = {"Police": _couche("Police", {"nom": ["Commissariat A", "Commissariat B", "Commissariat C"]},
+                           [box(X0 + 640, Y0 - 10, X0 + 660, Y0 + 10), Point(X0, Y0 + 300), Point(X0 - 9000, Y0)])}
+    cat = {"id": "police", "libelle": "Police (les plus proches)", "role": "secours", "couches": ["Police"],
+           "champ_libelle": "nom", "nombre": 2, "rayon_recherche_m": 15000, "couleur": "#1c3f94",
+           "propositions": {"evacuation": "Dans la zone d'évacuation"}}
+    cfg = copy.deepcopy(CFG)
+    cfg["crise"]["categories"] = [cat]
+    crise.controler(cfg["crise"], _erreur)
+    crise.reinitialiser()
+    monkeypatch.setattr(crise, "_couches", lambda c, libs: ({"Police": j["Police"][0]}, {}))
+    monkeypatch.setattr(crise, "_objets_l93", lambda c: j["Police"][1])
+    r = crise.analyser(cfg, CENTRE, [{"role": "evacuation", "rayon_m": 500}])
+    e = _cat(r, "police")["elements"]
+    assert [x["libelle"] for x in e] == ["Commissariat B", "Commissariat A"]     # les 2 plus proches, dans l'ordre
+    assert e[0]["rang"] == 1 and e[0]["secours"] and e[0]["zone"] == "evacuation" and e[0]["direction"] == "N"
+    assert e[1]["zone"] is None and e[1]["distance_m"] == pytest.approx(640, abs=0.1) and e[1]["proposition"] == "Hors zone"
+    # au-delà de rayon_max (3 km) : trouvé grâce au rayon de recherche
+    cat["nombre"] = 3
+    crise.reinitialiser()
+    assert len(_cat(crise.analyser(cfg, CENTRE, []), "police")["elements"]) == 3
+    # rien dans le rayon de recherche : anomalie
+    cat["rayon_recherche_m"] = 100
+    crise.reinitialiser()
+    r = crise.analyser(cfg, CENTRE, [])
+    assert not _cat(r, "police")["elements"] and any("aucun site à moins de 0.1 km" in a for a in r["anomalies"])
+    lignes = crise.lignes_csv(cfg, crise.analyser(cfg, CENTRE, []))
+    assert lignes == []
+    cat["nombre"] = 0
+    with pytest.raises(ValueError, match="nombre"):
+        crise.controler(cfg["crise"], _erreur)

@@ -43,7 +43,8 @@ def _emprise_texte(service: dict) -> str:
 
 
 def identifiant_wfs(service: dict) -> str:
-    return inv_sig.identifiant(f"wfs:{service['url'].rstrip('/?')}|{service['couche']}", _emprise_texte(service))
+    filtre = f"|{service['filtre_cql']}" if service.get("filtre_cql") else ""   # même couche, filtres différents
+    return inv_sig.identifiant(f"wfs:{service['url'].rstrip('/?')}|{service['couche']}{filtre}", _emprise_texte(service))
 
 
 def identifiant_geojson(service: dict) -> str:
@@ -157,8 +158,13 @@ def zone_le_long_de(decl: dict, cfg: dict):
 def _pages_wfs(client, service, base, emprise, taille, reste):
     """Objets d'une emprise WGS84, page par page (au plus `reste`) ; nombre total annoncé par le service."""
     ouest, sud, est, nord = emprise
-    # WFS 2.0 : axes de EPSG:4326 dans l'ordre latitude, longitude
-    base = {**base, "BBOX": f"{sud},{ouest},{nord},{est},urn:ogc:def:crs:EPSG::4326"}
+    if service.get("filtre_cql"):
+        # GeoServer refuse BBOX et CQL_FILTER ensemble : l'emprise entre dans le filtre (CQL : longitude, latitude)
+        champ = service.get("champ_geometrie") or "geometrie"
+        base = {**base, "CQL_FILTER": f"({service['filtre_cql']}) AND BBOX({champ},{ouest},{sud},{est},{nord},'EPSG:4326')"}
+    else:
+        # WFS 2.0 : axes de EPSG:4326 dans l'ordre latitude, longitude
+        base = {**base, "BBOX": f"{sud},{ouest},{nord},{est},urn:ogc:def:crs:EPSG::4326"}
     features, total, decalage = [], None, 0
     while len(features) < reste:
         n_demande = min(taille, reste - len(features))

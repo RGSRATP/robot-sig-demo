@@ -124,12 +124,20 @@ export class OutilCrise {
       paint: { 'line-color': ['get', 'couleur'], 'line-width': 2.5 } });
     c.addLayer({ id: 'sig-crise-polygone', type: 'line', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'saisie'],
       paint: { 'line-color': ['get', 'couleur'], 'line-width': 2, 'line-dasharray': [2, 1.5] } });
-    c.addLayer({ id: 'sig-crise-lignes', type: 'line', source: SOURCE_ELEMENTS, filter: ['==', ['geometry-type'], 'LineString'],
+    c.addLayer({ id: 'sig-crise-secours', type: 'line', source: SOURCE_ELEMENTS, filter: ['==', ['get', 'nature'], 'secours'],
+      layout: { 'line-cap': 'round' },
+      paint: { 'line-color': ['get', 'couleur'], 'line-width': 3, 'line-dasharray': [3, 2] } });
+    c.addLayer({ id: 'sig-crise-secours-distance', type: 'symbol', source: SOURCE_ELEMENTS, filter: ['==', ['get', 'nature'], 'distance-secours'],
+      layout: { 'text-field': ['get', 'texte'], 'text-font': police, 'text-size': 12.5, 'text-allow-overlap': true },
+      paint: { 'text-color': ['get', 'couleur'], 'text-halo-color': '#ffffff', 'text-halo-width': 2.5 } });
+    c.addLayer({ id: 'sig-crise-lignes', type: 'line', source: SOURCE_ELEMENTS,
+      filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'nature'], 'secours']],
       layout: { 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'couleur'], 'line-width': 6, 'line-dasharray': [1.5, 1] } });
     c.addLayer({ id: 'sig-crise-ouvrages', type: 'line', source: SOURCE_ELEMENTS, filter: ['==', ['geometry-type'], 'Polygon'],
       paint: { 'line-color': ['get', 'couleur'], 'line-width': 3 } });
-    c.addLayer({ id: 'sig-crise-points', type: 'circle', source: SOURCE_ELEMENTS, filter: ['==', ['geometry-type'], 'Point'],
+    c.addLayer({ id: 'sig-crise-points', type: 'circle', source: SOURCE_ELEMENTS,
+      filter: ['all', ['==', ['geometry-type'], 'Point'], ['!=', ['get', 'nature'], 'distance-secours']],
       layout: { 'circle-sort-key': ['get', 'ordre'] },
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, ['*', ['get', 'rayon'], 0.35], 15, ['get', 'rayon']],
         'circle-opacity': ['case', ['coalesce', ['get', 'secondaire'], false], 0.75, 1], 'circle-stroke-opacity': ['case', ['coalesce', ['get', 'secondaire'], false], 0.6, 1],
@@ -463,7 +471,7 @@ export class OutilCrise {
 
   /** Éléments pour les exports : zone vivante et décision de chaque élément touché ou décidé. */
   _pourExport() {
-    return (this.resultat?.categories || []).map((k) => {
+    return (this.resultat?.categories || []).filter((k) => k.role !== 'secours').map((k) => {
       const vus = new Set();
       const elements = k.elements.filter((e) => this._zone(e) || this._decision(k, e)).map((e) => {
         vus.add(e.cle);
@@ -490,6 +498,9 @@ export class OutilCrise {
       } else {
         await exporterPdf({ evt: { ...evt, auteur: this.auteur }, zonesCfg: this.zonesCfg, statuts: this.statuts,
           categories: this._pourExport(), sources: this.resultat?.sources || [], anomalies: this.resultat?.anomalies || [],
+          secours: (this.resultat?.categories || []).filter((k) => k.role === 'secours').flatMap((k) => k.elements.map((e) => ({
+            categorie: k.libelle.split(' (')[0], libelle: e.libelle, distance_m: e.distance_m, direction: e.direction,
+            couleur: this.categoriesCfg.get(k.id)?.couleur || '#1c3f94' }))),
           avertissement: this.cfg.avertissement, carte: this.carte, format });
       }
       this._noter('export', `Export ${format === 'excel' ? 'Excel' : format === 'geojson' ? 'GeoJSON du périmètre' : `PDF ${format.toUpperCase()}`}`);
@@ -555,6 +566,7 @@ export class OutilCrise {
   _compteurs() {
     const t = new Map();
     for (const k of this.resultat?.categories || []) {
+      if (k.role === 'secours') continue;
       const par = new Map(this.roles.map((r) => [r, 0]));
       for (const e of k.elements) { const z = this._zone(e); if (z) par.set(z, par.get(z) + 1); }
       t.set(k.id, par);
@@ -679,6 +691,7 @@ export class OutilCrise {
     const touches = {};
     const noms = {};
     for (const k of res.categories) {
+      if (k.role === 'secours') continue;   // ils suivent le point, pas le périmètre
       touches[k.id] = k.elements.filter((e) => e.zone).map((e) => e.cle);
       for (const e of k.elements) noms[`${k.id}|${e.cle}`] = e.libelle;
     }
@@ -688,6 +701,7 @@ export class OutilCrise {
       const ajouts = [];
       const retraits = [];
       for (const k of res.categories) {
+        if (k.role === 'secours') continue;
         const avant = new Set(prec.touches?.[k.id] || []);
         const apres = new Set(touches[k.id]);
         const plus = [...apres].filter((c) => !avant.has(c));
@@ -705,11 +719,31 @@ export class OutilCrise {
     versions.push({ heure: heure_, auteur: this.auteur, signature, centre: evt.centre, zones: JSON.parse(JSON.stringify(evt.zones)), touches });
   }
 
+  /** Secours les plus proches : ligne pointillée depuis l'événement, distance au milieu, site étiqueté. */
+  _secoursCarte() {
+    const f = [];
+    const centre = this.evt?.centre;
+    if (!centre) return f;
+    for (const k of this.resultat?.categories || []) {
+      if (k.role !== 'secours') continue;
+      const couleur = this.categoriesCfg.get(k.id)?.couleur || '#1c3f94';
+      for (const e of k.elements) {
+        const nom = k.libelle.split(' (')[0];
+        f.push({ type: 'Feature', properties: { nature: 'secours', couleur }, geometry: { type: 'LineString', coordinates: [centre, e.position] } });
+        f.push({ type: 'Feature', properties: { nature: 'distance-secours', couleur, texte: `${nom} ${distance(e.distance_m)}` },
+          geometry: { type: 'Point', coordinates: [(centre[0] + e.position[0]) / 2, (centre[1] + e.position[1]) / 2] } });
+        f.push({ type: 'Feature', properties: { couleur, rayon: e.rang === 1 ? 8 : 6, ordre: 8, etiquette: e.libelle },
+          geometry: { type: 'Point', coordinates: e.position } });
+      }
+    }
+    return f;
+  }
+
   /** Pendant le glissement : seulement les points (géométries des tronçons recalculées au relâchement). */
   _elementsVivants() {
     const f = [];
     for (const k of this.resultat?.categories || []) {
-      if (k.role === 'lignes') continue;
+      if (k.role === 'lignes' || k.role === 'secours') continue;
       for (const e of k.elements) {
         const z = this._zone(e);
         if (z) f.push({ type: 'Feature', properties: this._proprietes(k, e, z, 0), geometry: { type: 'Point', coordinates: e.position } });
@@ -719,8 +753,9 @@ export class OutilCrise {
   }
 
   _elements() {
-    const f = [];
+    const f = this._secoursCarte();
     for (const k of this.resultat?.categories || []) {
+      if (k.role === 'secours') continue;
       for (const e of k.elements) {
         const z = this._zone(e);
         if (!z) continue;
@@ -826,6 +861,7 @@ export class OutilCrise {
     this._zoneEtat = el('div');
     this._majEtat();
     sections.push(el('section', { className: 'sig-section' }, el('h3', { textContent: 'Synthèse' }), this._zoneEtat, this._zoneCompteurs));
+    sections.push(this._sectionSecours());
     sections.push(this._sectionChangements());
     if (this.message) sections.push(el('p', { className: /impossible/.test(this.message) ? 'sig-erreur' : 'sig-info', textContent: this.message }));
     if (this.resultat) sections.push(...this._listes());
@@ -833,6 +869,35 @@ export class OutilCrise {
     sections.push(this._sectionJournal());
     if (this.resultat) sections.push(this._sources());
     return sections;
+  }
+
+  _sectionSecours() {
+    const cats = (this.resultat?.categories || []).filter((k) => k.role === 'secours');
+    if (!cats.length) return null;
+    const items = [];
+    for (const k of cats) {
+      const couleur = this.categoriesCfg.get(k.id)?.couleur || '#1c3f94';
+      if (!k.elements.length) items.push(el('li', { className: 'sig-info', textContent: `${k.libelle} : aucun site trouvé (voir les anomalies)` }));
+      for (const e of k.elements) {
+        const nom = el('button', { type: 'button', className: 'sig-lien sig-crise-nom', textContent: e.libelle });
+        nom.addEventListener('click', () => this._ouvrir(e));
+        const zone = this._zone(e);
+        const ids = this.categoriesCfg.get(k.id)?.statuts || [...this.statuts.keys()];
+        const d = this.evt.statuts?.[`${k.id}|${e.cle}`];
+        const choix = el('select', { className: `sig-champ sig-crise-statut${d ? ' sig-crise-statut--decide' : ''}` },
+          ...ids.map((i) => el('option', { value: i, textContent: this.statuts.get(i).libelle, selected: i === (d?.statut || this.statutDefaut) })));
+        choix.addEventListener('change', () => this.decider(k, [e], choix.value));
+        items.push(el('li', { className: 'sig-crise-element' },
+          el('div', { className: 'sig-crise-element__tete' }, el('span', { className: 'sig-legende__pastille', style: `background:${couleur}` }), nom,
+            el('span', { className: 'sig-crise-distance', textContent: `${distance(e.distance_m)} ${e.direction}` })),
+          el('div', { className: 'sig-info', textContent: [k.libelle.split(' (')[0], e.detail, zone ? `dans la zone ${this.zonesCfg.get(zone).libelle}` : null].filter(Boolean).join(' · ') }),
+          zone && e.proposition ? el('div', { className: 'sig-crise-proposition sig-crise-proposition--alerte', textContent: `→ ${e.proposition}` }) : null,
+          el('div', { className: 'sig-crise-decision' }, choix)));
+      }
+    }
+    return el('section', { className: 'sig-section' }, el('h3', { textContent: 'Secours les plus proches' }),
+      el('ul', { className: 'sig-crise-elements' }, ...items),
+      el('p', { className: 'sig-info', textContent: 'Distance à vol d’oiseau jusqu’au site (BD TOPO), pas le temps de trajet.' }));
   }
 
   _sectionChangements() {
@@ -963,13 +1028,13 @@ export class OutilCrise {
       const zc = this.zonesCfg.get(r);
       return el('th', { title: zc.libelle }, el('span', { className: 'sig-legende__pastille', style: `background:${zc.couleur}` }), ` ${zc.libelle.split(/[ /]/)[0]}`);
     }));
-    const lignes = this.resultat.categories.map((k) => el('tr', {}, el('th', { scope: 'row', textContent: k.libelle }),
+    const lignes = this.resultat.categories.filter((k) => k.role !== 'secours').map((k) => el('tr', {}, el('th', { scope: 'row', textContent: k.libelle }),
       ...actifs.map((r) => { const n = t.get(k.id)?.get(r) || 0; return el('td', { className: n ? 'sig-crise-nombre' : 'sig-crise-zero', textContent: n ? String(n) : '—' }); })));
     return el('table', { className: 'sig-crise-table' }, el('thead', {}, tete), el('tbody', {}, ...lignes));
   }
 
   _listes() {
-    return this.resultat.categories.map((k) => {
+    return this.resultat.categories.filter((k) => k.role !== 'secours').map((k) => {
       const touches = k.elements.filter((e) => this._zone(e))
         .sort((a, b) => this.zonesCfg.get(this._zone(a)).rang - this.zonesCfg.get(this._zone(b)).rang || a.distance_m - b.distance_m);
       const horsZone = k.elements.filter((e) => !this._zone(e) && this._decision(k, e));

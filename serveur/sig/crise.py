@@ -40,7 +40,7 @@ from . import objets as obj_sig
 
 _VERS_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
 _VERS_WGS84 = Transformer.from_crs(2154, 4326, always_xy=True)
-ROLES = ("points", "stations", "acces", "lignes", "plai", "maquettes")
+ROLES = ("points", "stations", "acces", "lignes", "plai", "maquettes", "secours")
 DIRECTIONS = ("N", "NE", "E", "SE", "S", "SO", "O", "NO")
 CACHE_CANDIDATS = 16       # points d'événement gardés en mémoire (technique)
 SEGMENTS_CERCLE = 64       # quarts de cercle des zones circulaires (écart au vrai cercle < 8 cm à 1 km)
@@ -121,6 +121,13 @@ def controler(c, erreur) -> None:
             d = k.get("dossiers")
             if not (isinstance(d, dict) and d and all(isinstance(v, str) for v in d.values())):
                 raise erreur(f"{nom} : « dossiers » attendu (nom du dossier de la maquette → type d'ouvrage)")
+        if role == "secours":
+            if not (isinstance(k.get("nombre", 1), int) and not isinstance(k.get("nombre", 1), bool) and 1 <= k.get("nombre", 1) <= 10):
+                raise erreur(f"{nom} : « nombre » doit être un entier de 1 à 10 (sites les plus proches montrés)")
+            if "rayon_recherche_m" in k and not (nombre(k["rayon_recherche_m"]) and k["rayon_recherche_m"] <= 50000):
+                raise erreur(f"{nom} : « rayon_recherche_m » doit être compris entre 0 et 50 000 m")
+        if "couleur" in k and not isinstance(k["couleur"], str):
+            raise erreur(f"{nom} : « couleur » doit être une couleur (ex. « #1c3f94 »)")
     roles = [k.get("role", "points") for k in cats]
     if "acces" in roles and "stations" not in roles:
         raise erreur("« crise.categories » : une catégorie « acces » demande une catégorie « stations »")
@@ -149,7 +156,7 @@ def config_interface(cfg: dict) -> dict | None:
         "rayon_max_m": c["rayon_max_m"], "rayon_defaut_m": c["rayon_defaut_m"], "pas_m": c["pas_m"],
         "raccourcis_m": c["raccourcis_m"], "types": c["types"], "zones": c["zones"],
         "categories": [{"id": k["id"], "libelle": k["libelle"], "role": k.get("role", "points"),
-                        "propositions": k.get("propositions", {}),
+                        "propositions": k.get("propositions", {}), "couleur": k.get("couleur"), "nombre": k.get("nombre"),
                         "statuts": k.get("statuts") or [x["id"] for x in statuts(cfg)]} for k in c["categories"]],
         "statuts": statuts(cfg),
         "auteur_defaut": auteur_poste(),
@@ -421,7 +428,9 @@ def candidats(cfg: dict, centre_l93: tuple[float, float]) -> dict:
                                              + (f" ({motif})" if motif else " (non déclarée ou illisible)"))
                 continue
             try:
-                objets += _candidats_couche(couche, k, centre, rayon_max)
+                # secours : cherchés plus loin (le commissariat le plus proche peut être au-delà de rayon_max)
+                rayon = float(k.get("rayon_recherche_m", rayon_max)) if role == "secours" else rayon_max
+                objets += _candidats_couche(couche, k, centre, rayon)
                 sources.append(_source(couche))
             except inv_sig.AnomalieCouche as e:
                 resultat["anomalies"].append(f"{k['libelle']} : {lib} : {e}")
@@ -558,6 +567,18 @@ def _analyser_plai(cat, objets, centre, zones):
     return sortie
 
 
+def _analyser_secours(cat, objets, centre, zones):
+    """Les « nombre » sites les plus proches du point (commissariats, casernes), dans ou hors des zones."""
+    sortie = []
+    for i, o in enumerate(sorted(objets, key=lambda o: o["distance_m"])[:int(cat.get("nombre", 1))], 1):
+        e = _element(cat, f"{o['couche']}:{o['n']}", o["libelle"] or o["detail"] or "Site sans nom", [o], centre, zones,
+                     detail=o["detail"], secours=True, rang=i)
+        if not e["zone"]:
+            e["proposition"] = "Hors zone" + (" : le plus proche" if i == 1 else "")
+        sortie.append(e)
+    return sortie
+
+
 def _analyser_maquettes(cat, objets, centre, zones):
     puits = {p.lower() for p in cat.get("puits", [])}
     types = {k.lower(): v for k, v in cat["dossiers"].items()}
@@ -592,6 +613,7 @@ def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict]) -> dict:
     acces_cat = next((k for k in c["categories"] if k.get("role") == "acces"), None)
     acces = [dict(a) for a in base["categories"].get(acces_cat["id"], [])] if acces_cat else []
     categories = []
+    anomalies = list(base["anomalies"])   # copie : la base est gardée en cache
     for k in c["categories"]:
         role = k.get("role", "points")
         objets = base["categories"].get(k["id"], [])
@@ -605,6 +627,10 @@ def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict]) -> dict:
             elements = _analyser_plai(k, objets, centre, zg)
         elif role == "maquettes":
             elements = _analyser_maquettes(k, objets, centre, zg)
+        elif role == "secours":
+            elements = _analyser_secours(k, objets, centre, zg)
+            if not elements:   # rien dans le rayon de recherche : signalé, jamais ignoré en silence
+                anomalies.append(f"{k['libelle']} : aucun site à moins de {k.get('rayon_recherche_m', c['rayon_max_m']) / 1000:g} km")
         else:
             elements = _analyser_points(k, objets, centre, zg)
         for e in elements:
@@ -624,7 +650,7 @@ def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict]) -> dict:
                   for z in zg],
         "categories": categories,
         "sources": base["sources"],
-        "anomalies": base["anomalies"],
+        "anomalies": anomalies,
         "date": datetime.now().isoformat(timespec="seconds"),
     }
 
@@ -685,10 +711,10 @@ def lignes_csv(cfg: dict, r: dict) -> list[dict]:
     for k in r["categories"]:
         src = sources.get(k["id"], [])
         for e in k["elements"]:
-            if not e["zone"]:
+            if not e["zone"] and k["role"] != "secours":
                 continue
             s = next((x for x in src if x["couche"] == e.get("couche")), src[0] if src else {})
-            lignes.append({"zone": zones.get(e["zone"], e["zone"]), "categorie": k["libelle"], "libelle": e["libelle"],
+            lignes.append({"zone": zones.get(e["zone"], e["zone"]) if e["zone"] else "hors zone", "categorie": k["libelle"], "libelle": e["libelle"],
                            "detail": e.get("detail"), "cause": e.get("cause"), "distance_m": e["distance_m"],
                            "direction": e["direction"], "proposition": e.get("proposition"),
                            "lon": e["position"][0], "lat": e["position"][1],
@@ -883,10 +909,11 @@ def classeur(cfg: dict, evt: dict) -> bytes:
         vus = set()
         for e in k["elements"]:
             d = decisions.get(f"{k['id']}|{e['cle']}") or {}
-            if not e["zone"] and not d:
+            if not e["zone"] and not d and k["role"] != "secours":
                 continue
             vus.add(e["cle"])
-            lignes.append([zones[e["zone"]]["libelle"] if e["zone"] else "hors périmètre", e["libelle"], e.get("detail"),
+            hors = "hors zone" if k["role"] == "secours" else "hors périmètre"
+            lignes.append([zones[e["zone"]]["libelle"] if e["zone"] else hors, e["libelle"], e.get("detail"),
                            e.get("cause"), e["distance_m"], e["direction"], e.get("proposition"),
                            libelles_statuts.get(d.get("statut", defaut), d.get("statut")), _heure(d.get("heure")),
                            d.get("auteur"), e["position"][0], e["position"][1]])

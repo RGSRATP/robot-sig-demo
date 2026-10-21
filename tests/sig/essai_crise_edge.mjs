@@ -117,6 +117,8 @@ try {
   await nouveau('Explosion Bastille C2');
   await chercher('Bastille', 'Station : Bastille');
   await attendre();
+  log('E secours :', await evaluer(`[...document.querySelectorAll('.sig-section')].find((x) => x.querySelector('h3')?.textContent === 'Secours les plus proches')?.querySelectorAll('li').length + ' sites : ' + [...([...document.querySelectorAll('.sig-section')].find((x) => x.querySelector('h3')?.textContent === 'Secours les plus proches')?.querySelectorAll('.sig-crise-element__tete') || [])].map((t) => t.textContent).join(' / ')`));
+  await photo('crise_E0_secours.png');
   const categorie = (debut) => `[...document.querySelectorAll('.sig-crise-categorie')].find((d) => d.querySelector('summary')?.textContent.startsWith(${JSON.stringify(debut)}))`;
   log('E masse accès :', await evaluer(`(() => { const d = ${categorie('Accès des stations')}; d.open = true; const b = d.querySelector('.sig-crise-masse button'); b.click(); return d.querySelector('summary').textContent; })()`));
   await pause(500);

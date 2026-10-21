@@ -471,7 +471,10 @@ def _controler_flux(cfg: dict, section: str, services: list, erreur) -> None:
                 raise erreur(f"{nom} : « {cle} » doit être un nombre positif")
         if "style" in s and not isinstance(s["style"], dict):
             raise erreur(f"{nom} : « style » doit être un dictionnaire")
-        for cle in ("export", "export_couche", "systeme", "champ_libelle", "attribution", "format_sortie", "tri"):
+        if not wfs and any(k in s for k in ("filtre_cql", "champ_geometrie")):
+            raise erreur(f"{nom} : « filtre_cql » et « champ_geometrie » sont réservés aux services WFS")
+        for cle in ("export", "export_couche", "systeme", "champ_libelle", "attribution", "format_sortie", "tri",
+                    "filtre_cql", "champ_geometrie"):
             if cle in s and not isinstance(s[cle], str):
                 raise erreur(f"{nom} : « {cle} » doit être un texte")
         id_ = identifiant_wfs(s) if wfs else identifiant_geojson(s)
