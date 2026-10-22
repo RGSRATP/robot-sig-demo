@@ -35,12 +35,16 @@ from pyproj import Transformer
 from shapely.geometry import Point, Polygon, mapping
 from shapely.ops import nearest_points, unary_union
 
+from . import crise_local
 from . import inventaire as inv_sig
 from . import objets as obj_sig
 
 _VERS_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
 _VERS_WGS84 = Transformer.from_crs(2154, 4326, always_xy=True)
-ROLES = ("points", "stations", "acces", "lignes", "plai", "maquettes", "secours")
+ROLES = ("points", "stations", "acces", "lignes", "plai", "maquettes", "secours", "rues", "bouclage", "denombrement")
+ROLES_LOCAUX = ("rues", "bouclage", "denombrement")   # objets d'une source autour de l'événement (crise_local)
+FUSION_BOUCLAGE_M = 30     # points de bouclage d'une même voie plus proches que cela : un seul point
+PAS_COURBE_M = 25          # pas des courbes de dénombrement (compteurs en direct pendant le glissement)
 DIRECTIONS = ("N", "NE", "E", "SE", "S", "SO", "O", "NO")
 CACHE_CANDIDATS = 16       # points d'événement gardés en mémoire (technique)
 SEGMENTS_CERCLE = 64       # quarts de cercle des zones circulaires (écart au vrai cercle < 8 cm à 1 km)
@@ -54,6 +58,7 @@ MAX_JOURNAL = 5000         # entrées de main courante gardées (technique)
 _verrou = threading.Lock()
 _objets_couches: dict = {}                    # (id couche, version) -> objets en Lambert 93
 _candidats: OrderedDict = OrderedDict()  # (centre, rayon, versions) -> candidats
+_parts_courbes: dict = {}                # (catégorie, centre, objets) -> parts des surfaces par rayon (dénombrement)
 
 
 class ErreurCrise(ValueError):
@@ -92,6 +97,8 @@ def controler(c, erreur) -> None:
         if z["id"] in ids:
             raise erreur(f"« crise.zones » : identifiant « {z['id']} » en double")
         ids.add(z["id"])
+    crise_local.controler(c, erreur)
+    ids_locales = {s["id"] for s in c.get("sources_locales", [])}
     cats = c.get("categories")
     if not (isinstance(cats, list) and cats):
         raise erreur("« crise.categories » doit être une liste de catégories analysées")
@@ -106,9 +113,26 @@ def controler(c, erreur) -> None:
         role = k.get("role", "points")
         if role not in ROLES:
             raise erreur(f"{nom} : « role » doit être l'un de : {', '.join(ROLES)}")
-        if role != "maquettes" and not (isinstance(k.get("couches"), list) and k["couches"]
-                                        and all(isinstance(x, str) for x in k["couches"])):
+        if "source_locale" in k:
+            if k["source_locale"] not in ids_locales:
+                raise erreur(f"{nom} : « source_locale » doit citer une source de « crise.sources_locales » "
+                             f"({', '.join(sorted(ids_locales)) or 'aucune déclarée'})")
+            if "couches" in k:
+                raise erreur(f"{nom} : « couches » ou « source_locale », pas les deux")
+        elif role in ROLES_LOCAUX:
+            raise erreur(f"{nom} : le rôle « {role} » demande « source_locale » (source autour de l'événement)")
+        elif role != "maquettes" and not (isinstance(k.get("couches"), list) and k["couches"]
+                                          and all(isinstance(x, str) for x in k["couches"])):
             raise erreur(f"{nom} : « couches » attendu (libellés exacts des couches, comme dans le gestionnaire)")
+        if role == "bouclage":
+            zb = k.get("zones_bouclage")
+            if not (isinstance(zb, list) and zb and all(z in ids for z in zb)):
+                raise erreur(f"{nom} : « zones_bouclage » attendu (rôles de zone dont la limite est bouclée)")
+        if role == "denombrement":
+            m = k.get("mesures")
+            if not (isinstance(m, list) and m and all(isinstance(x, dict) and isinstance(x.get("id"), str)
+                                                       and isinstance(x.get("libelle"), str) for x in m)):
+                raise erreur(f"{nom} : « mesures » attendu (id, libelle ; champ facultatif : nombre d'objets sinon)")
         p = k.get("propositions", {})
         if not isinstance(p, dict) or any(z not in ids for z in p):
             raise erreur(f"{nom} : « propositions » doit associer un texte à des rôles de zone déclarés ({', '.join(ids)})")
@@ -320,7 +344,13 @@ def _texte(v) -> str | None:
 # ---------------------------------------------------------------- candidats (objets à moins de rayon_max du point)
 
 def _candidats_couche(couche, categorie: dict, centre: Point, rayon_max: float) -> list[dict]:
-    origine, geoms, arbre = _objets_l93(couche)
+    return _candidats_objets(_objets_l93(couche), couche.id, couche.libelle, couche.champ_libelle, categorie, centre, rayon_max)
+
+
+def _candidats_objets(objets, id_couche, libelle_couche, champ_libelle, categorie: dict, centre: Point,
+                      rayon_max: float) -> list[dict]:
+    """Objets à moins de `rayon_max` du point, avec leur distance et les champs utiles de la catégorie."""
+    origine, geoms, arbre = objets
     proches = arbre.query(centre.buffer(rayon_max), predicate="intersects")
     if not len(proches):
         return []
@@ -328,24 +358,33 @@ def _candidats_couche(couche, categorie: dict, centre: Point, rayon_max: float) 
     regroupement = categorie.get("regroupement")
 
     def colonne(nom):
-        """Valeurs du champ pour les objets proches (lecture en bloc : des dizaines de milliers d'objets)."""
-        if not nom or nom not in origine.columns:
-            return [None] * len(proches)
-        return [_texte(v) for v in origine[nom].to_numpy()[proches]]
+        """Valeurs du champ pour les objets proches (lecture en bloc : des dizaines de milliers d'objets) ;
+        une liste de champs donne la première valeur renseignée (nom de voie à gauche, sinon à droite)."""
+        noms = [x for x in (nom if isinstance(nom, list) else [nom]) if x and x in origine.columns]
+        vals = [None] * len(proches)
+        for x in noms:
+            col = origine[x].to_numpy()[proches]
+            vals = [v if v is not None else _texte(w) for v, w in zip(vals, col)]
+        return vals
 
-    libelles = colonne(categorie.get("champ_libelle") or couche.champ_libelle)
+    libelles = colonne(categorie.get("champ_libelle") or champ_libelle)
     # « @couche » : un seul élément par couche (réseau de gaz, dont les tronçons n'ont pas de nom)
-    groupes = [couche.libelle] * len(proches) if regroupement == "@couche" else colonne(regroupement)
+    groupes = [libelle_couche] * len(proches) if regroupement == "@couche" else colonne(regroupement)
     details, types = colonne(categorie.get("champ_detail")), colonne(categorie.get("champ_type"))
+    ordres = colonne(categorie.get("champ_ordre"))
+    sans_nom = categorie.get("libelle_sans_nom")
+    if sans_nom and regroupement and regroupement != "@couche":
+        # voies sans nom regroupées par nature (« Voie sans nom (Rond-point) »), jamais une par tronçon
+        groupes = [g or (f"{sans_nom} ({t})" if t else sans_nom) for g, t in zip(groupes, types)]
     numeros = origine.index.to_numpy()[proches]
     ponctuels = shapely.get_type_id(geoms[proches]) == 0
     sortie = []
     for i, (n, d) in enumerate(zip(proches.tolist(), dist.tolist())):
         g = geoms[n]
         sortie.append({
-            "n": int(numeros[i]), "couche": couche.id, "geom": g, "distance_m": float(d),
-            "proche": g if ponctuels[i] else nearest_points(g, centre)[0],
-            "libelle": libelles[i], "groupe": groupes[i], "detail": details[i], "type": types[i],
+            "n": int(numeros[i]), "couche": id_couche, "geom": g, "distance_m": float(d),
+            "proche": g if ponctuels[i] else None,   # calculé pour l'élément retenu seulement (_element)
+            "libelle": libelles[i], "groupe": groupes[i], "detail": details[i], "type": types[i], "ordre": ordres[i],
         })
     return sortie
 
@@ -455,7 +494,7 @@ def _element(cat: dict, cle: str, libelle: str, membres: list[dict], centre: Poi
         z = zone_de(m["geom"], m["distance_m"], zones)
         if z is not None and (meilleure is None or z["rang"] < meilleure[0]["rang"]):
             meilleure = (z, m)
-    p = proche["proche"]
+    p = proche["proche"] if proche.get("proche") is not None else nearest_points(proche["geom"], centre)[0]
     e = {
         "categorie": cat["id"], "cle": cle, "libelle": libelle,
         "distance_m": round(proche["distance_m"], 1),
@@ -597,7 +636,160 @@ def _analyser_maquettes(cat, objets, centre, zones):
     return sortie
 
 
-def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict]) -> dict:
+def _nombre(v) -> float | None:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def _analyser_bouclage(cat, objets, centre, zones):
+    """Points où les voies coupent la limite extérieure des zones bouclées : un point à barrer par voie et par
+    passage (points d'une même voie à moins de FUSION_BOUCLAGE_M fusionnés). Zone fixée par le serveur : le point
+    est sur la limite, un recalcul par la distance au centre le ferait basculer d'un côté ou de l'autre."""
+    zb = [z for z in zones if z["role"] in cat["zones_bouclage"]]
+    if not zb or not objets:
+        return []
+    limite = unary_union([z["geom"] for z in zb]).boundary
+    fusion = float(cat.get("fusion_m", FUSION_BOUCLAGE_M))
+    points: dict[str, list[tuple[Point, dict]]] = {}
+    for o in objets:
+        if not o["geom"].intersects(limite):
+            continue
+        coupe = o["geom"].intersection(limite)
+        for p in getattr(coupe, "geoms", [coupe]):
+            if p.is_empty:
+                continue
+            p = p if p.geom_type == "Point" else p.representative_point()   # tronçon qui longe la limite
+            voie = o["groupe"] or o["libelle"] or "Voie sans nom"
+            deja = points.setdefault(voie, [])
+            if not any(q.distance(p) < fusion for q, _ in deja):
+                deja.append((p, o))
+    sortie = []
+    for voie, liste in points.items():
+        for p, o in liste:
+            z = min(zb, key=lambda z: z["geom"].boundary.distance(p))
+            ordre = _nombre(o.get("ordre"))
+            detail = ", ".join(x for x in (o.get("type"), f"importance {o['ordre']}" if o.get("ordre") else None) if x)
+            m = {**o, "geom": p, "proche": p, "distance_m": float(p.distance(centre))}
+            e = _element(cat, f"{voie}@{round(p.x)},{round(p.y)}", voie, [m], centre, zones, detail=detail or None,
+                         fixe=True, ordre=ordre)
+            e["zone"] = z["role"]
+            e["proposition"] = (cat.get("propositions") or {}).get(z["role"], "Barrer la voie")
+            sortie.append(e)
+    return sortie
+
+
+def _regions_exclusives(zones: list[dict]) -> list[tuple[dict, object]]:
+    """Chaque zone privée des zones plus graves : un objet compte dans la plus grave qui le contient."""
+    sortie, deja = [], None
+    for z in sorted(zones, key=lambda z: z["rang"]):
+        sortie.append((z, z["geom"] if deja is None else z["geom"].difference(deja)))
+        deja = z["geom"] if deja is None else deja.union(z["geom"])
+    return sortie
+
+
+def _analyser_denombrement(cat, objets, centre, zones, rayon_donnees: float):
+    """Mesures (nombre d'objets, somme d'un champ) par zone et courbe « valeur dans un cercle de rayon r ».
+
+    Surfaces au prorata (« prorata: true », carreaux de population) : chaque objet compte pour la part de sa
+    surface dans la zone ; sinon un objet compte entier dans la zone la plus grave qu'il touche (bâtiments).
+    La courbe sert à l'interface pendant le glissement ; les valeurs par zone sont exactes (polygones compris)."""
+    pas = float(cat.get("pas_courbe_m", PAS_COURBE_M))
+    rayons = np.arange(0, rayon_donnees + pas, pas)
+    prorata = bool(cat.get("prorata"))
+    geoms = np.array([o["geom"] for o in objets], dtype=object)
+    dist = np.array([o["distance_m"] for o in objets], dtype=float)
+    valeurs = {}
+    for m in cat["mesures"]:
+        champ = m.get("champ")
+        v = np.array([1.0 if not champ else (_nombre(o["valeurs"].get(champ)) or 0.0) for o in objets], dtype=float)
+        valeurs[m["id"]] = v
+    if prorata and len(objets):
+        surfaces = shapely.area(geoms)
+    cle = (cat["id"], round(centre.x, 1), round(centre.y, 1), pas, len(objets), id(objets[0]["geom"]) if objets else 0)
+    with _verrou:
+        parts = _parts_courbes.get(cle)
+    if prorata and len(objets) and parts is None:   # ne dépend que du point : gardé pendant le glissement
+        loin = shapely.hausdorff_distance(geoms, centre)   # sommet le plus éloigné : au-delà, objet entier dans le cercle
+        parts = np.zeros((len(rayons), len(objets)))
+        for i, r in enumerate(rayons):
+            dedans = loin <= r
+            parts[i, dedans] = 1.0
+            bord = (~dedans) & (dist < r)
+            if bord.any():
+                disque = centre.buffer(float(r), quad_segs=SEGMENTS_CERCLE)
+                parts[i, bord] = shapely.area(shapely.intersection(geoms[bord], disque)) / np.where(surfaces[bord] > 0, surfaces[bord], 1)
+        with _verrou:
+            _parts_courbes[cle] = parts
+            while len(_parts_courbes) > CACHE_CANDIDATS:
+                _parts_courbes.pop(next(iter(_parts_courbes)))
+    mesures = []
+    regions = _regions_exclusives(zones)
+    for m in cat["mesures"]:
+        v = valeurs[m["id"]]
+        if prorata and len(objets):
+            courbe = parts @ v
+        else:
+            ordre = np.argsort(dist)
+            cumul = np.concatenate([[0.0], np.cumsum(v[ordre])])
+            courbe = cumul[np.searchsorted(dist[ordre], rayons, side="right")]
+        par_zone = {}
+        for z, region in regions:
+            if prorata and len(objets):
+                touches = shapely.intersects(geoms, region)
+                inter = np.zeros(len(objets))
+                if touches.any():
+                    inter[touches] = shapely.area(shapely.intersection(geoms[touches], region)) / np.where(
+                        surfaces[touches] > 0, surfaces[touches], 1)
+                par_zone[z["role"]] = float(inter @ v) + par_zone.get(z["role"], 0.0)
+            else:
+                par_zone.setdefault(z["role"], 0.0)
+        if not prorata:
+            for o, x in zip(objets, v):
+                z = zone_de(o["geom"], o["distance_m"], zones)
+                if z is not None:
+                    par_zone[z["role"]] = par_zone.get(z["role"], 0.0) + float(x)
+        mesures.append({"id": m["id"], "libelle": m["libelle"], "arrondi": m.get("arrondi", 1),
+                        "par_zone": {k: round(x, 1) for k, x in par_zone.items()},
+                        "courbe": np.round(courbe, 1).tolist()})
+    return {"mesures": mesures, "pas_courbe_m": pas, "rayon_donnees_m": rayon_donnees,
+            "date_donnee": cat.get("date_donnee"), "objets": len(objets)}
+
+
+def distance_texte(m: float) -> str:
+    return f"{m / 1000:g} km".replace(".", ",") if m >= 1000 else f"{m:g} m"
+
+
+def _hors_donnees(zones: list[dict], centre: Point, rayon: float) -> list[str]:
+    """Zones qui dépassent le disque des données d'une source locale (résultats incomplets au-delà)."""
+    disque = centre.buffer(rayon + 1, quad_segs=SEGMENTS_CERCLE)
+    return [f"{z['role']} ({round(z['rayon_m'])} m)" if z["forme"] == "cercle" else z["role"]
+            for z in zones if not disque.contains(z["geom"])]
+
+
+def _locaux(cfg: dict, k: dict, centre: Point, etats: dict, fabrique) -> tuple[list[dict], dict]:
+    """Objets d'une catégorie à source locale (rues, bâtiments, population) et état de la source (lue une fois
+    par analyse : rues et points de bouclage partagent la même source)."""
+    s = crise_local.source(cfg, k["source_locale"])
+    if s["id"] not in etats:
+        etats[s["id"]] = crise_local.objets(cfg, s, (centre.x, centre.y), **({"fabrique": fabrique} if fabrique else {}))
+    etat = etats[s["id"]]
+    if etat["objets"] is None:
+        return [], {**etat, "source": s}
+    objets = _candidats_objets(etat["objets"], None, s["libelle"], None, k, centre, float(s["rayon_m"]))
+    if k.get("role") == "denombrement" and objets:
+        origine = etat["objets"][0]
+        n = np.array([o["n"] for o in objets])
+        colonnes = {m["champ"]: origine[m["champ"]].to_numpy()[n]
+                    for m in k["mesures"] if m.get("champ") and m["champ"] in origine.columns}
+        for i, o in enumerate(objets):
+            o["valeurs"] = {c: v[i] for c, v in colonnes.items()}
+    return objets, {**etat, "source": s}
+
+
+def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict], fabrique=None) -> dict:
     """Éléments touchés par catégorie et par zone, plus tous les candidats jusqu'à « rayon_max_m »."""
     c = cfg["crise"]
     try:
@@ -614,15 +806,49 @@ def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict]) -> dict:
     acces = [dict(a) for a in base["categories"].get(acces_cat["id"], [])] if acces_cat else []
     categories = []
     anomalies = list(base["anomalies"])   # copie : la base est gardée en cache
+    sources = list(base["sources"])
+    chargement = []
+    etats: dict[str, dict] = {}
     for k in c["categories"]:
         role = k.get("role", "points")
         objets = base["categories"].get(k["id"], [])
-        if role == "stations":
+        extra = {}
+        if k.get("source_locale"):
+            id_s = k["source_locale"]
+            deja = id_s in etats
+            objets, etat = _locaux(cfg, k, centre, etats, fabrique)
+            s = etat["source"]
+            if not deja:   # état de la source signalé une fois (rues et points de bouclage la partagent)
+                anomalies += [f"{s['libelle']} : {a}" for a in etat["anomalies"]]
+                if etat["en_cours"]:
+                    chargement.append({"source": s["libelle"], "progression": etat["progression"]})
+                elif etat["objets"] is None:
+                    anomalies.append(f"{s['libelle']} : service injoignable et aucun cache autour de ce point")
+                else:
+                    sources.append({"couche": None, "libelle": s["libelle"], "date": s.get("date_donnee") or etat["date"],
+                                    "origine": etat["origine"], "avertissements": [], "categorie": k["id"]})
+                    dehors = _hors_donnees(zg, centre, float(s["rayon_m"]))
+                    if dehors:
+                        anomalies.append(f"{s['libelle']} : données chargées jusqu'à {distance_texte(s['rayon_m'])} du point ; "
+                                         f"zone(s) au-delà : {', '.join(dehors)} (résultats incomplets)")
+            if role == "denombrement" and etat["objets"] is not None:
+                manquants = [m["champ"] for m in k["mesures"] if m.get("champ") and m["champ"] not in etat["objets"][0].columns]
+                if manquants and len(etat["objets"][0]):
+                    anomalies.append(f"{k['libelle']} : champ(s) absent(s) de la source : {', '.join(manquants)}")
+            extra = {"en_cours": etat["en_cours"], "source": s["libelle"]}
+        if role == "denombrement":
+            d = _analyser_denombrement(k, objets, centre, zg, float(crise_local.source(cfg, k["source_locale"])["rayon_m"])) \
+                if not extra.get("en_cours") else {"mesures": []}
+            categories.append({"id": k["id"], "libelle": k["libelle"], "role": role, "elements": [], "touches": 0, **extra, **d})
+            continue
+        if role == "bouclage":
+            elements = _analyser_bouclage(k, objets, centre, zg)
+        elif role in ("lignes", "rues"):
+            elements = _analyser_lignes(k, objets, centre, zg)
+        elif role == "stations":
             elements = _analyser_stations(k, objets, acces, c, centre, zg)
         elif role == "acces":
             elements = _analyser_acces(k, acces, centre, zg)
-        elif role == "lignes":
-            elements = _analyser_lignes(k, objets, centre, zg)
         elif role == "plai":
             elements = _analyser_plai(k, objets, centre, zg)
         elif role == "maquettes":
@@ -640,16 +866,20 @@ def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict]) -> dict:
             lon_, lat_ = _VERS_WGS84.transform(xy[:, 0], xy[:, 1])
             for e, a, b in zip(elements, np.round(lon_, DECIMALES_WGS84).tolist(), np.round(lat_, DECIMALES_WGS84).tolist()):
                 e["position"] = [a, b]
-        elements.sort(key=lambda e: (roles.index(e["zone"]) if e["zone"] else len(roles), e["distance_m"]))
+        if role == "bouclage":   # voies principales d'abord (importance 1 à 5 de la BD TOPO), puis la distance
+            elements.sort(key=lambda e: (roles.index(e["zone"]), e["ordre"] if e.get("ordre") is not None else 99, e["distance_m"]))
+        else:
+            elements.sort(key=lambda e: (roles.index(e["zone"]) if e["zone"] else len(roles), e["distance_m"]))
         categories.append({"id": k["id"], "libelle": k["libelle"], "role": role, "elements": elements,
-                           "touches": sum(1 for e in elements if e["zone"])})
+                           "touches": sum(1 for e in elements if e["zone"]), **extra})
     return {
         "centre": {"wgs84": [lon, lat], "l93": [round(centre_l93[0], 2), round(centre_l93[1], 2)]},
         "rayon_max_m": c["rayon_max_m"],
         "zones": [{"role": z["role"], "forme": z["forme"], "rayon_m": z["rayon_m"], "surface_m2": round(z["geom"].area)}
                   for z in zg],
         "categories": categories,
-        "sources": base["sources"],
+        "sources": sources,
+        "chargement": chargement,
         "anomalies": anomalies,
         "date": datetime.now().isoformat(timespec="seconds"),
     }
@@ -798,6 +1028,8 @@ def reinitialiser() -> None:
     with _verrou:
         _objets_couches.clear()
         _candidats.clear()
+        _parts_courbes.clear()
+    crise_local.reinitialiser()
 
 
 # ---------------------------------------------------------------- export Excel (lot C2)

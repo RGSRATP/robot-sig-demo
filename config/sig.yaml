@@ -560,6 +560,18 @@ services_wfs:
     attribution: "IGN BD TOPO"
     style: { couleur: "#d9480f" }
     visible: false
+  # Établissements sensibles (lot C3, 2026-10-22) : santé et personnes âgées de la BD TOPO (remplace FINESS :
+  # même domaine IGN déjà validé) ; 323 hôpitaux, 348 établissements hospitaliers, 819 maisons de retraite en IDF.
+  - libelle: "Hôpitaux et maisons de retraite (BD TOPO, IGN)"
+    url: "https://data.geopf.fr/wfs/ows"
+    couche: "BDTOPO_V3:zone_d_activite_ou_d_interet"
+    filtre_cql: "nature IN ('Hôpital','Etablissement hospitalier','Maison de retraite')"
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]
+    champ_libelle: "toponyme"
+    cache_heures: 168
+    attribution: "IGN BD TOPO"
+    style: { couleur: "#c2255c" }
+    visible: false
 
 # GeoJSON par URL (catalogue Open Data, 15/10/2026) : exports des API Explore (Opendatasoft) ou fichiers publiés.
 # Clés : libelle, url ; facultatives : systeme (défaut EPSG:4326, norme GeoJSON), emprise_wgs84 (filtre après lecture),
@@ -752,6 +764,43 @@ crise:
     - { id: surveille, libelle: "À surveiller", decide: true }
     - { id: ouvert, libelle: "Maintenu ouvert", decide: true }
     - { id: leve, libelle: "Levé", decide: true }
+  # Sources « autour de l'événement » (lot C3) : couches nationales demandées au WFS par carreaux de Lambert 93
+  # (« carreau_m ») qui couvrent le disque de « rayon_m » autour du point, gardées en cache (« cache_heures »).
+  # Au-delà de « rayon_m », les résultats sont signalés incomplets. « champs » : attributs demandés (volume réduit).
+  dossier_cache: "cache/crise"         # carreaux téléchargés (hors Git)
+  requetes_paralleles: 4
+  sources_locales:
+    - id: rues
+      libelle: "Tronçons de route (BD TOPO, IGN)"
+      url: "https://data.geopf.fr/wfs/ows"
+      couche: "BDTOPO_V3:troncon_de_route"
+      # chaussées au sol ou sur pont (souterrains écartés), ni escaliers ni sentiers, pas de tronçons fictifs
+      filtre_cql: "fictif = false AND position_par_rapport_au_sol NOT IN ('-1','-2','-3','-4') AND nature NOT IN ('Escalier','Sentier','Bac ou liaison maritime')"
+      champs: [nature, importance, nom_collaboratif_gauche, nom_collaboratif_droite, sens_de_circulation]
+      rayon_m: 3000
+      carreau_m: 1000
+      cache_heures: 720
+      attribution: "IGN BD TOPO"
+    - id: batiments
+      libelle: "Bâtiments (BD TOPO, IGN)"
+      url: "https://data.geopf.fr/wfs/ows"
+      couche: "BDTOPO_V3:batiment"
+      champs: [nombre_de_logements, usage_1, hauteur]
+      rayon_m: 1500                    # ~550 bâtiments par carreau de 500 m dans Paris
+      carreau_m: 500
+      cache_heures: 720
+      attribution: "IGN BD TOPO"
+    - id: population
+      libelle: "Population carroyée 200 m (INSEE Filosofi)"
+      url: "https://data.geopf.fr/wfs/ows"
+      couche: "INSEE.FILOSOFI.INDICATORS:carreaux_200m"
+      champ_geometrie: "geom"
+      champs: [ind, men, ind_0_3, ind_80p]
+      rayon_m: 3000
+      carreau_m: 1000
+      cache_heures: 2160
+      date_donnee: "Filosofi, millésime 2019 probable (non indiqué par le service)"
+      attribution: "INSEE, Filosofi (carroyage 200 m), via IGN Géoplateforme"
   categories:
     - id: stations
       libelle: "Stations"
@@ -823,6 +872,51 @@ crise:
       champ_detail: "type_etablissement"
       statuts: [propose, evacue, confine, alerte, surveille, leve]
       propositions: { evacuation: "Évacuer", fermeture: "Évacuer ou confiner (à décider)", vigilance: "Confiner, informer" }
+    - id: sante
+      libelle: "Hôpitaux et maisons de retraite"
+      couches: ["Hôpitaux et maisons de retraite (BD TOPO, IGN)"]
+      champ_libelle: "toponyme"
+      champ_detail: "nature"
+      statuts: [propose, evacue, confine, alerte, surveille, leve]
+      propositions: { evacuation: "Évacuer (personnes peu mobiles : moyens à prévoir)", fermeture: "Confiner ou évacuer (à décider)", vigilance: "Confiner, informer" }
+    - id: rues
+      libelle: "Rues"
+      role: rues
+      source_locale: rues
+      regroupement: [nom_collaboratif_gauche, nom_collaboratif_droite]   # une voie = ses tronçons
+      champ_type: "nature"
+      libelle_sans_nom: "Voie sans nom"
+      statuts: [propose, ferme, surveille, ouvert, leve]
+      propositions: { evacuation: "Fermer la voie", fermeture: "Fermer la voie ou restreindre la circulation", vigilance: "Surveiller" }
+    - id: bouclage
+      libelle: "Points de bouclage"
+      role: bouclage
+      source_locale: rues
+      zones_bouclage: [evacuation, fermeture]   # voies qui coupent la limite extérieure de ces zones
+      regroupement: [nom_collaboratif_gauche, nom_collaboratif_droite]
+      champ_type: "nature"
+      champ_ordre: "importance"        # 1 = voie principale : en tête de liste
+      libelle_sans_nom: "Voie sans nom"
+      statuts: [propose, ferme, surveille, leve]
+      propositions: { evacuation: "Barrer la voie (limite de la zone d'évacuation)", fermeture: "Barrer la voie (limite du périmètre)" }
+    - id: batiments
+      libelle: "Bâtiments"
+      role: denombrement
+      source_locale: batiments
+      mesures:
+        - { id: batiments, libelle: "Bâtiments" }
+        - { id: logements, libelle: "Logements", champ: "nombre_de_logements" }
+    - id: population
+      libelle: "Population estimée"
+      role: denombrement
+      source_locale: population
+      prorata: true                    # carreau coupé par la zone : population au prorata de la surface
+      date_donnee: "INSEE Filosofi, carreaux de 200 m (millésime 2019 probable)"
+      mesures:
+        - { id: habitants, libelle: "Habitants", champ: "ind", arrondi: 10 }
+        - { id: menages, libelle: "Ménages", champ: "men", arrondi: 10 }
+        - { id: enfants, libelle: "dont enfants de 0 à 3 ans", champ: "ind_0_3", arrondi: 10 }
+        - { id: ages, libelle: "dont personnes de 80 ans et plus", champ: "ind_80p", arrondi: 10 }
     - id: gaz
       libelle: "Réseaux de gaz"
       role: lignes

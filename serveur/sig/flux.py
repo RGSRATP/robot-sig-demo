@@ -32,6 +32,8 @@ SYSTEME_WFS_DEFAUT = "EPSG:2154"
 SYSTEME_GEOJSON_DEFAUT = "EPSG:4326"
 TAILLE_PAGE_WFS = 1000
 MAX_MO_GEOJSON = 50
+NOUVEAUX_ESSAIS = 3       # après une réponse 429 (trop de requêtes) ou 503 (technique)
+ATTENTE_MAX_S = 10.0
 
 
 def _emprise_texte(service: dict) -> str:
@@ -53,11 +55,24 @@ def identifiant_geojson(service: dict) -> str:
 
 # ---------------------------------------------------------------- lecture des réponses
 
-def _get(client: httpx.Client, url: str, params: dict | None = None) -> httpx.Response:
+def _attente(r: httpx.Response, essai: int) -> float:
+    """Délai avant un nouvel essai : « Retry-After » du service s'il est lisible, sinon 1, 2, 4 s."""
     try:
-        r = client.get(url, params=params)
-    except httpx.HTTPError as e:
-        raise ErreurService(f"service {reseau.message_erreur(e)}") from None
+        return min(float(r.headers.get("retry-after", "")), ATTENTE_MAX_S)
+    except ValueError:
+        return min(2.0 ** essai, ATTENTE_MAX_S)
+
+
+def _get(client: httpx.Client, url: str, params: dict | None = None) -> httpx.Response:
+    for essai in range(NOUVEAUX_ESSAIS + 1):
+        try:
+            r = client.get(url, params=params)
+        except httpx.HTTPError as e:
+            raise ErreurService(f"service {reseau.message_erreur(e)}") from None
+        # Géoplateforme : HTTP 429 au-delà d'un débit par poste ; 503 : service momentanément saturé
+        if r.status_code not in (429, 503) or essai == NOUVEAUX_ESSAIS:
+            break
+        time.sleep(_attente(r, essai))
     if r.status_code in (401, 403):
         raise ErreurService(f"accès refusé (HTTP {r.status_code})")
     if r.status_code >= 400:
@@ -155,16 +170,21 @@ def zone_le_long_de(decl: dict, cfg: dict):
 
 # ---------------------------------------------------------------- WFS 2.0
 
-def _pages_wfs(client, service, base, emprise, taille, reste):
-    """Objets d'une emprise WGS84, page par page (au plus `reste`) ; nombre total annoncé par le service."""
+def _pages_wfs(client, service, base, emprise, taille, reste, systeme_emprise="EPSG:4326"):
+    """Objets d'une emprise [ouest, sud, est, nord] (WGS84, ou Lambert 93 : carreaux de la carte de crise), page
+    par page (au plus `reste`) ; nombre total annoncé par le service."""
     ouest, sud, est, nord = emprise
+    code = systeme_emprise.split(":")[-1]
     if service.get("filtre_cql"):
-        # GeoServer refuse BBOX et CQL_FILTER ensemble : l'emprise entre dans le filtre (CQL : longitude, latitude)
+        # GeoServer refuse BBOX et CQL_FILTER ensemble : l'emprise entre dans le filtre (CQL : x, y ou lon, lat)
         champ = service.get("champ_geometrie") or "geometrie"
-        base = {**base, "CQL_FILTER": f"({service['filtre_cql']}) AND BBOX({champ},{ouest},{sud},{est},{nord},'EPSG:4326')"}
-    else:
+        base = {**base, "CQL_FILTER": f"({service['filtre_cql']}) AND BBOX({champ},{ouest},{sud},{est},{nord},'EPSG:{code}')"}
+    elif code == "4326":
         # WFS 2.0 : axes de EPSG:4326 dans l'ordre latitude, longitude
         base = {**base, "BBOX": f"{sud},{ouest},{nord},{est},urn:ogc:def:crs:EPSG::4326"}
+    else:
+        # Lambert 93 : axes dans l'ordre est, nord
+        base = {**base, "BBOX": f"{ouest},{sud},{est},{nord},urn:ogc:def:crs:EPSG::{code}"}
     features, total, decalage = [], None, 0
     while len(features) < reste:
         n_demande = min(taille, reste - len(features))
