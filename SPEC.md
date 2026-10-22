@@ -124,6 +124,25 @@ S'y ajoutent :
 
 **Recette** : scénario Bastille dans l'interface — élargissement de 500 m à 600 m avec les changements affichés, accès de la zone d'évacuation fermés en masse, note au journal, exports PDF, Excel et GeoJSON relus ; tests des statuts, du journal, des versions et des exports.
 
+### Lot C3 — Carte de gestion de crise : enrichir l'analyse *(ajouté le 2026-10-22)*
+
+Toutes les nouvelles sources sont sur `data.geopf.fr` (domaine déjà validé), sauf le vent (Open-Meteo, déjà connecté).
+
+- **Sources autour de l'événement** : les couches nationales trop volumineuses pour l'Île-de-France entière (tronçons de route et bâtiments de la BD TOPO, population carroyée INSEE) sont demandées au WFS par carreaux de Lambert 93 qui couvrent un disque autour du point, gardées en cache par carreau, chargées en arrière-plan sans bloquer l'analyse (« chargement en cours » affiché, analyse relancée). Au-delà du rayon chargé, les résultats sont signalés incomplets.
+- **Rues touchées** : voies regroupées par nom (nom à gauche, sinon à droite ; voies sans nom regroupées par nature), longueur dans la zone, tracé sur la carte.
+- **Points de bouclage** : points où les voies coupent la limite extérieure des zones bouclées (évacuation et fermeture par défaut), voies principales en tête (importance BD TOPO).
+- **Estimations** : bâtiments et logements (BD TOPO), habitants, ménages, enfants de 0 à 3 ans et personnes de 80 ans et plus (Filosofi, carreaux de 200 m au prorata de la surface dans la zone), par zone, suivies en direct pendant le glissement, datées.
+- **Établissements sensibles** : hôpitaux, établissements hospitaliers et maisons de retraite (BD TOPO), à côté des écoles.
+- **Recherche d'adresse** (géocodage de l'IGN, base de la BAN), avec les stations et les accès.
+- **Vent** au point (Open-Meteo) : flèche, secteur indicatif « sous le vent » en option, inscrit à la main courante et au PDF. Indication simple, pas un modèle de dispersion.
+- **Couloir** le long d'une ligne (canalisation, voie, cortège) : axe tracé sur la carte, tampon de part et d'autre.
+- **Import d'un périmètre** GeoJSON : aller-retour exact avec l'export (cercles, polygones, couloirs) ; polygones et lignes d'un autre SIG ; tout autre système que WGS84 est refusé, jamais supposé.
+- Les estimations, le vent et les couloirs figurent dans les exports PDF et Excel.
+
+Non fait dans ce lot : trafic temps réel (PRIM IDFM, clé en attente).
+
+**Recette** : scénario « fuite de gaz rue de la Roquette » placé par l'adresse (rues, points de bouclage, estimations, vent), couloir tracé, import du périmètre exporté au lot C2 ; recalcul en moins de 2 s pour 1 km dans Paris une fois les données chargées ; tests des carreaux (cache, échec, refus de débit), des rues, du bouclage, du dénombrement (prorata, polygone, couloir), du géocodage, du vent et de l'import.
+
 ## 5. Principes
 
 - Ne jamais bloquer, toujours tracer : une donnée défectueuse est signalée, les autres continuent de s'afficher.

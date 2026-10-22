@@ -929,8 +929,8 @@ crise:
       mesures:
         - { id: habitants, libelle: "Habitants", champ: "ind", arrondi: 10 }
         - { id: menages, libelle: "Ménages", champ: "men", arrondi: 10 }
-        - { id: enfants, libelle: "dont enfants de 0 à 3 ans", champ: "ind_0_3", arrondi: 10 }
-        - { id: ages, libelle: "dont personnes de 80 ans et plus", champ: "ind_80p", arrondi: 10 }
+        - { id: enfants, libelle: "dont 0 à 3 ans", champ: "ind_0_3", arrondi: 10 }
+        - { id: ages, libelle: "dont 80 ans et plus", champ: "ind_80p", arrondi: 10 }
     - id: gaz
       libelle: "Réseaux de gaz"
       role: lignes
