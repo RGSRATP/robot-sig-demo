@@ -743,6 +743,7 @@ crise:
   rayon_defaut_m: 500                  # simple clic sans glisser
   pas_m: 10                            # arrondi du rayon pendant le glissement (Maj : au mètre)
   raccourcis_m: [500, 600, 1000]
+  tampon_couloir_m: 100                # couloir le long d'une ligne : distance de part et d'autre de l'axe (modifiable)
   rattachement_acces_m: 250            # un accès est rattaché à la station la plus proche à moins de cette distance
   types: ["Explosion", "Incendie", "Effondrement", "Fuite de gaz", "Colis suspect", "Inondation", "Accident de voirie", "Autre"]
   avertissement: "Aide à la décision : données ouvertes et PLAI à leur date, à confirmer sur place."
@@ -764,11 +765,24 @@ crise:
     - { id: surveille, libelle: "À surveiller", decide: true }
     - { id: ouvert, libelle: "Maintenu ouvert", decide: true }
     - { id: leve, libelle: "Levé", decide: true }
+  # Recherche d'adresse (lot C3) : géocodage de l'IGN (base de la BAN), domaine data.geopf.fr déjà validé
+  geocodage:
+    url: "https://data.geopf.fr/geocodage/search"
+    limite: 6
+    autour_wgs84: [2.3522, 48.8566]    # priorité aux réponses proches de Paris
+    emprise_wgs84: [1.44, 48.12, 3.56, 49.24]   # Île-de-France : réponses hors emprise écartées
+  # Vent au point de l'événement (lot C3) : source temps réel « open_meteo » (URL, attribution) ; flèche et
+  # secteur indicatif « sous le vent » (angle total). Indication simple, pas un modèle de dispersion.
+  vent:
+    source: meteo
+    secteur_deg: 60
+    cache_minutes: 10
   # Sources « autour de l'événement » (lot C3) : couches nationales demandées au WFS par carreaux de Lambert 93
   # (« carreau_m ») qui couvrent le disque de « rayon_m » autour du point, gardées en cache (« cache_heures »).
   # Au-delà de « rayon_m », les résultats sont signalés incomplets. « champs » : attributs demandés (volume réduit).
   dossier_cache: "cache/crise"         # carreaux téléchargés (hors Git)
-  requetes_paralleles: 4
+  requetes_paralleles: 2              # requêtes simultanées vers le service (toutes sources)
+  requetes_par_seconde: 4             # débit plafonné : la Géoplateforme répond HTTP 429 au-delà
   sources_locales:
     - id: rues
       libelle: "Tronçons de route (BD TOPO, IGN)"

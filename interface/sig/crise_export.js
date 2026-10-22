@@ -32,17 +32,25 @@ export function cercle([lon, lat], rayon, n = POINTS_CERCLE) {
   return anneau;
 }
 
-/** GeoJSON du périmètre : point de l'événement et zones (cercles en vrais cercles au sol, polygones). */
-export function geojsonPerimetre(evt, zonesCfg) {
+/**
+ * GeoJSON du périmètre : point de l'événement et zones (cercles en vrais cercles au sol, polygones, couloirs).
+ * Un couloir est écrit en surface (géométrie calculée par le serveur, zonesCalculees) avec son axe et son tampon
+ * en attributs : les autres SIG lisent une surface, l'import de la carte de crise le restitue à l'identique.
+ */
+export function geojsonPerimetre(evt, zonesCfg, zonesCalculees = []) {
   const features = [{ type: 'Feature', geometry: { type: 'Point', coordinates: evt.centre },
     properties: { nature: 'evenement', titre: evt.titre, type: evt.type, mode: evt.mode, debut: evt.debut } }];
-  for (const z of evt.zones) {
+  evt.zones.forEach((z, i) => {
     const zc = zonesCfg.get(z.role);
-    const anneau = z.forme === 'cercle' ? cercle(evt.centre, z.rayon_m) : [...z.coordonnees, z.coordonnees[0]];
-    features.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [anneau] },
+    let geometry;
+    if (z.forme === 'cercle') geometry = { type: 'Polygon', coordinates: [cercle(evt.centre, z.rayon_m)] };
+    else if (z.forme === 'couloir') geometry = zonesCalculees[i]?.forme === 'couloir' && zonesCalculees[i].geometrie || { type: 'LineString', coordinates: z.coordonnees };
+    else geometry = { type: 'Polygon', coordinates: [[...z.coordonnees, z.coordonnees[0]]] };
+    features.push({ type: 'Feature', geometry,
       properties: { nature: 'zone', role: z.role, libelle: zc.libelle, couleur: zc.couleur, forme: z.forme,
-        rayon_m: z.forme === 'cercle' ? z.rayon_m : null } });
-  }
+        rayon_m: z.forme === 'cercle' ? z.rayon_m : null,
+        ...(z.forme === 'couloir' ? { tampon_m: z.tampon_m, axe: z.coordonnees } : {}) } });
+  });
   return { type: 'FeatureCollection', name: evt.titre, features };
 }
 
@@ -130,8 +138,12 @@ export async function exporterPdf(d) {
     const zc = zonesCfg.get(z.role);
     doc.setFillColor(...rgb(zc.couleur));
     doc.rect(x, y - 3, 4, 4, 'F');
-    doc.text(`${zc.libelle} — ${z.forme === 'cercle' ? `${nf(z.rayon_m)} m` : 'polygone dessiné'}`, x + 6, y);
+    doc.text(`${zc.libelle} — ${z.forme === 'cercle' ? `${nf(z.rayon_m)} m` : z.forme === 'couloir' ? `couloir, ${nf(z.tampon_m)} m de part et d'autre` : 'polygone dessiné'}`, x + 6, y);
     y += 5 * echelle;
+  }
+  if (d.vent) {
+    taille(8);
+    for (const l of doc.splitTextToSize(`Vent : ${d.vent} (Open-Meteo, indicatif)`, colonne - 2)) { doc.text(l, x, y); y += 4 * echelle; }
   }
   y += 2;
   titre('Éléments touchés');
@@ -237,7 +249,7 @@ export async function exporterPdf(d) {
   doc.save(`crise_${nomFichier(evt.titre)}.pdf`);
 }
 
-export function exporterGeojson(evt, zonesCfg) {
-  const blob = new Blob([JSON.stringify(geojsonPerimetre(evt, zonesCfg), null, 1)], { type: 'application/geo+json' });
+export function exporterGeojson(evt, zonesCfg, zonesCalculees) {
+  const blob = new Blob([JSON.stringify(geojsonPerimetre(evt, zonesCfg, zonesCalculees), null, 1)], { type: 'application/geo+json' });
   telecharger(blob, `perimetre_${nomFichier(evt.titre)}.geojson`);
 }

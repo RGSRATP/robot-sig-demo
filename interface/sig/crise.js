@@ -7,6 +7,7 @@ import { lire } from './api.js';
 import { depuisLambert93, versLambert93 } from './lambert93.js';
 import { el } from './ui.js';
 import { exporterGeojson, exporterPdf, telecharger } from './crise_export.js';
+import { lirePerimetre } from './crise_import.js';
 
 const SOURCE_ZONES = 'sig-crise-zones';
 const SOURCE_ELEMENTS = 'sig-crise-elements';
@@ -16,6 +17,10 @@ const CLIC_SANS_GLISSER_PX = 6;   // en dessous : simple clic, rayon par défaut
 const MAX_LISTE = 40;             // éléments montrés par catégorie (les autres : dans l'export)
 const COULEUR_EVENEMENT = '#c92a2a';
 const COULEUR_REMPLACEMENT = '#2b8a3e';
+const COULEUR_VENT = '#1971c2';
+const RAFRAICHIR_VENT_MS = 10 * 60 * 1000;
+const ROSE_16 = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSO', 'SO', 'OSO', 'O', 'ONO', 'NO', 'NNO'];
+const rose = (deg) => ROSE_16[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
 const DELAI_ANALYSE_MS = 60000;   // au-delà : abandon, message et bouton « Relancer »
 const RELANCE_CHARGEMENT_MS = 2500;   // données autour du point en cours de chargement : analyse relancée
 const ROLES_TRACES = ['lignes', 'rues'];        // dessinés par leur tracé dans la zone, sans pictogramme
@@ -96,6 +101,8 @@ export class OutilCrise {
     this.rolePolygone = this.roles[0];
     this.historique = [];
     this.assombrir = true;
+    this.vent = null;              // { disponible, direction_deg, vitesse_kmh, rafales_kmh, heure, secteur_deg, … }
+    this.secteurVent = false;      // secteur « sous le vent » (indicatif) affiché
     this._requete = 0;
     this._rendu = null;
     this.enregistres = null;
@@ -125,6 +132,12 @@ export class OutilCrise {
       paint: { 'fill-color': ['get', 'couleur'], 'fill-opacity': 0.16 } });
     c.addLayer({ id: 'sig-crise-contours', type: 'line', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'zone'],
       paint: { 'line-color': ['get', 'couleur'], 'line-width': 2.5 } });
+    c.addLayer({ id: 'sig-crise-vent-secteur', type: 'fill', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'vent-secteur'],
+      paint: { 'fill-color': COULEUR_VENT, 'fill-opacity': 0.13 } });
+    c.addLayer({ id: 'sig-crise-vent-secteur-bord', type: 'line', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'vent-secteur'],
+      paint: { 'line-color': COULEUR_VENT, 'line-width': 1.5, 'line-dasharray': [3, 2] } });
+    c.addLayer({ id: 'sig-crise-vent', type: 'line', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'vent'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': COULEUR_VENT, 'line-width': 4 } });
     c.addLayer({ id: 'sig-crise-polygone', type: 'line', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'saisie'],
       paint: { 'line-color': ['get', 'couleur'], 'line-width': 2, 'line-dasharray': [2, 1.5] } });
     c.addLayer({ id: 'sig-crise-secours', type: 'line', source: SOURCE_ELEMENTS, filter: ['==', ['get', 'nature'], 'secours'],
@@ -165,6 +178,9 @@ export class OutilCrise {
     c.addLayer({ id: 'sig-crise-rayons', type: 'symbol', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'libelle'],
       layout: { 'text-field': ['get', 'texte'], 'text-font': police, 'text-size': 13, 'text-allow-overlap': true, 'text-anchor': 'bottom' },
       paint: { 'text-color': ['get', 'couleur'], 'text-halo-color': '#ffffff', 'text-halo-width': 2.5 } });
+    c.addLayer({ id: 'sig-crise-vent-libelle', type: 'symbol', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'vent-libelle'],
+      layout: { 'text-field': ['get', 'texte'], 'text-font': police, 'text-size': 13, 'text-allow-overlap': true, 'text-anchor': 'top', 'text-offset': [0, 0.6] },
+      paint: { 'text-color': COULEUR_VENT, 'text-halo-color': '#ffffff', 'text-halo-width': 2.5 } });
     c.addLayer({ id: 'sig-crise-poignees', type: 'circle', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'poignee'],
       paint: { 'circle-radius': 7, 'circle-color': '#ffffff', 'circle-stroke-color': ['get', 'couleur'], 'circle-stroke-width': 3 } });
     c.addLayer({ id: 'sig-crise-centre', type: 'circle', source: SOURCE_ZONES, filter: ['==', ['get', 'nature'], 'centre'],
@@ -225,7 +241,7 @@ export class OutilCrise {
   }
 
   _deplacement(e) {
-    if (this.mode === 'polygone' && this.polygone.length) {
+    if (['polygone', 'couloir'].includes(this.mode) && this.polygone.length) {
       this._curseurPolygone = [e.lngLat.lng, e.lngLat.lat];
       this._dessiner();
       return;
@@ -264,7 +280,7 @@ export class OutilCrise {
   /** Clic sur la carte (carte.js) ; vrai si consommé (placement, polygone, poignée). */
   clic(e) {
     if (Date.now() - (this._finGeste || 0) < 500) return true;
-    if (this.mode === 'polygone') {
+    if (['polygone', 'couloir'].includes(this.mode)) {
       this.polygone.push([e.lngLat.lng, e.lngLat.lat]);
       this._dessiner();
       this._rendre();
@@ -275,7 +291,7 @@ export class OutilCrise {
   }
 
   doubleClic() {
-    if (this.mode !== 'polygone') return false;
+    if (!['polygone', 'couloir'].includes(this.mode)) return false;
     if (this.polygone.length > 1) this.polygone.pop();   // second clic du double-clic
     this._terminerPolygone();
     return true;
@@ -291,7 +307,7 @@ export class OutilCrise {
       this.carte.getCanvas().style.cursor = '';
       this._dessiner();
       this._rendre();
-    } else if (e.key === 'Enter' && this.mode === 'polygone' && !saisie) {
+    } else if (e.key === 'Enter' && ['polygone', 'couloir'].includes(this.mode) && !saisie) {
       this._terminerPolygone();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !saisie) {
       e.preventDefault();
@@ -347,8 +363,15 @@ export class OutilCrise {
 
   _cadrer() {
     const r = Math.max(...this.evt.zones.filter((z) => z.forme === 'cercle').map((z) => z.rayon_m), 300);
-    const so = decaler(this.evt.centre, -r * 1.15, -r * 1.15);
-    const ne = decaler(this.evt.centre, r * 1.15, r * 1.15);
+    let so = decaler(this.evt.centre, -r * 1.15, -r * 1.15);
+    let ne = decaler(this.evt.centre, r * 1.15, r * 1.15);
+    for (const z of this.evt.zones) {   // polygones et couloirs (tampon compris, approché en degrés)
+      const marge = z.forme === 'couloir' ? (z.tampon_m * 1.2) / 111000 : 0;
+      for (const [lon, lat] of z.coordonnees || []) {
+        so = [Math.min(so[0], lon - marge * 1.5), Math.min(so[1], lat - marge)];
+        ne = [Math.max(ne[0], lon + marge * 1.5), Math.max(ne[1], lat + marge)];
+      }
+    }
     // marge du haut : le bandeau de l'événement ne cache pas les rayons écrits au nord des cercles
     this.carte.fitBounds([so, ne], { padding: { top: 90, bottom: 30, left: 30, right: 30 }, pitch: 0, bearing: 0, duration: 900 });
   }
@@ -366,8 +389,9 @@ export class OutilCrise {
     this._rendre();
   }
 
-  commencerPolygone() {
-    this.mode = this.mode === 'polygone' ? null : 'polygone';
+  /** Tracé d'un polygone ou d'un couloir (axe le long d'une canalisation, d'une voie…), sommet par sommet. */
+  commencerPolygone(forme = 'polygone') {
+    this.mode = this.mode === forme ? null : forme;
     this.polygone = [];
     this.carte.doubleClickZoom[this.mode ? 'disable' : 'enable']();
     this.carte.getCanvas().style.cursor = this.mode ? 'crosshair' : '';
@@ -375,9 +399,13 @@ export class OutilCrise {
   }
 
   _terminerPolygone() {
-    if (this.polygone.length >= 3) {
+    const couloir = this.mode === 'couloir';
+    if (this.polygone.length >= (couloir ? 2 : 3)) {
       this._memoriser();
-      this.evt.zones.push({ role: this.rolePolygone, forme: 'polygone', coordonnees: this.polygone });
+      this.evt.zones.push(couloir
+        ? { role: this.rolePolygone, forme: 'couloir', coordonnees: this.polygone, tampon_m: this.cfg.tampon_couloir_m || 100 }
+        : { role: this.rolePolygone, forme: 'polygone', coordonnees: this.polygone });
+      this._noter('périmètre', couloir ? `Couloir tracé (${this.polygone.length} sommets, ${this.cfg.tampon_couloir_m || 100} m de part et d'autre)` : `Polygone tracé (${this.polygone.length} sommets)`);
       this.analyser();
     }
     this.polygone = [];
@@ -395,6 +423,39 @@ export class OutilCrise {
     this.analyser();
     this._dessiner();
     this._rendre();
+  }
+
+  /** Périmètre lu dans un fichier GeoJSON (export de la carte de crise ou d'un autre SIG). */
+  importer(texte, nomFichier) {
+    try {
+      const r = lirePerimetre(texte, { zones: this.cfg.zones, roleDefaut: this.rolePolygone, centre: this.evt.centre,
+        tamponDefaut: this.cfg.tampon_couloir_m || 100 });
+      this._memoriser();
+      this.evt.centre = r.centre;
+      this.evt.zones.push(...r.zones);
+      this.mode = null;
+      this.carte.getCanvas().style.cursor = '';
+      this.message = `Périmètre importé : ${r.zones.length} zone(s)${r.notes.length ? ` — ${r.notes.join(' ; ')}` : ''}.`;
+      this._noter('périmètre', `Périmètre importé de « ${nomFichier} » : ${r.zones.length} zone(s)${r.notes.length ? ` (${r.notes.join(' ; ')})` : ''}`);
+      this._cadrer();
+      this.analyser();
+    } catch (e) {
+      this.message = `Import impossible : ${e.message}`;
+    }
+    this._dessiner();
+    this._rendre();
+  }
+
+  _boutonImport() {
+    const fichier = el('input', { type: 'file', accept: '.geojson,.json,application/geo+json,application/json', hidden: true });
+    fichier.addEventListener('change', async () => {
+      const f = fichier.files?.[0];
+      if (f) this.importer(await f.text(), f.name);
+    });
+    const b = el('button', { type: 'button', className: 'sig-bouton', textContent: 'Importer un périmètre (GeoJSON)',
+      title: 'Export de la carte de crise, ou périmètre dessiné dans un autre SIG (WGS84)' });
+    b.addEventListener('click', () => fichier.click());
+    return el('span', {}, b, fichier);
   }
 
   supprimerZone(i) {
@@ -415,6 +476,8 @@ export class OutilCrise {
     this.erreurAnalyse = null;
     this.evt = null;
     this.resultat = null;
+    this.vent = null;
+    this._cleVent = null;
     this.mode = null;
     this.polygone = [];
     this.carte.getCanvas().style.cursor = '';
@@ -424,8 +487,61 @@ export class OutilCrise {
 
   // ------------------------------------------------------------ serveur
 
+  /** Vent au point (Open-Meteo, par le serveur) ; inscrit à la main courante pour chaque nouveau point. */
+  async majVent() {
+    if (!this.cfg.vent || !this.evt?.centre) return;
+    const [lon, lat] = this.evt.centre;
+    const cle = `${lon.toFixed(2)},${lat.toFixed(2)}`;
+    if (this._cleVent === cle && Date.now() - (this._heureVent || 0) < RAFRAICHIR_VENT_MS) return;
+    this._cleVent = cle;
+    this._heureVent = Date.now();
+    const evt = this.evt;
+    try {
+      const v = await lire('crise/vent', { lon, lat });
+      if (this.evt !== evt) return;
+      this.vent = v;
+      if (v.disponible) this._noter('contexte', `Vent au point : ${this._texteVent(v)}`);
+    } catch (e) {
+      this.vent = { disponible: false, message: `météo indisponible (${e.message})` };
+    }
+    this._dessiner();
+    if (!this.glisse) this._rendre();
+  }
+
+  _texteVent(v) {
+    const heure_ = v.heure ? ` (mesure de ${v.heure.slice(11, 16)})` : '';
+    return `${nf(v.vitesse_kmh)} km/h${v.rafales_kmh != null ? `, rafales ${nf(v.rafales_kmh)} km/h` : ''}, venant du ${rose(v.direction_deg)} (${nf(v.direction_deg)}°)${heure_}`;
+  }
+
+  /** Flèche du vent (vers où il souffle) et secteur « sous le vent », en Lambert 93 comme les cercles. */
+  _ventCarte(rayonMax) {
+    const v = this.vent;
+    if (!v?.disponible || !this.evt?.centre) return [];
+    const [cx, cy] = versLambert93(...this.evt.centre);
+    const vers = ((v.direction_deg + 180) * Math.PI) / 180;   // le vent souffle vers l'opposé d'où il vient
+    const pt = (a, d) => depuisLambert93(cx + d * Math.sin(a), cy + d * Math.cos(a));
+    const L = Math.max(rayonMax * 0.75, 250);
+    const pointe = pt(vers, L);
+    const [px, py] = versLambert93(...pointe);
+    const barbe = (da) => depuisLambert93(px + L * 0.12 * Math.sin(vers + Math.PI + da), py + L * 0.12 * Math.cos(vers + Math.PI + da));
+    const f = [
+      { type: 'Feature', properties: { nature: 'vent' }, geometry: { type: 'LineString', coordinates: [this.evt.centre, pointe] } },
+      { type: 'Feature', properties: { nature: 'vent' }, geometry: { type: 'LineString', coordinates: [barbe(-0.45), pointe, barbe(0.45)] } },
+      { type: 'Feature', properties: { nature: 'vent-libelle', texte: `Vent ${nf(v.vitesse_kmh)} km/h du ${rose(v.direction_deg)}` },
+        geometry: { type: 'Point', coordinates: pointe } },
+    ];
+    if (this.secteurVent) {
+      const demi = ((v.secteur_deg || 60) / 2) * (Math.PI / 180);
+      const arc = [];
+      for (let i = 0; i <= 24; i += 1) arc.push(pt(vers - demi + (2 * demi * i) / 24, Math.max(rayonMax, 300)));
+      f.unshift({ type: 'Feature', properties: { nature: 'vent-secteur' }, geometry: { type: 'Polygon', coordinates: [[this.evt.centre, ...arc, this.evt.centre]] } });
+    }
+    return f;
+  }
+
   async analyser() {
     if (!this.evt?.centre) return;
+    this.majVent();
     const n = (this._requete += 1);
     this._abandon?.abort();
     const abandon = new AbortController();
@@ -511,10 +627,10 @@ export class OutilCrise {
         const nom = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'crise.xlsx';
         telecharger(await r.blob(), nom);
       } else if (format === 'geojson') {
-        exporterGeojson(evt, this.zonesCfg);
+        exporterGeojson(evt, this.zonesCfg, this.resultat?.zones);
       } else {
         await exporterPdf({ evt: { ...evt, auteur: this.auteur }, zonesCfg: this.zonesCfg, statuts: this.statuts,
-          categories: this._pourExport(), mesures: this._mesures(), sources: this.resultat?.sources || [], anomalies: this.resultat?.anomalies || [],
+          categories: this._pourExport(), mesures: this._mesures(), vent: this.vent?.disponible ? this._texteVent(this.vent) : null, sources: this.resultat?.sources || [], anomalies: this.resultat?.anomalies || [],
           secours: (this.resultat?.categories || []).filter((k) => k.role === 'secours').flatMap((k) => k.elements.map((e) => ({
             categorie: k.libelle.split(' (')[0], libelle: e.libelle, distance_m: e.distance_m, direction: e.direction,
             couleur: this.categoriesCfg.get(k.id)?.couleur || '#1c3f94' }))),
@@ -577,7 +693,7 @@ export class OutilCrise {
       if (role && (meilleur == null || this.zonesCfg.get(role).rang < this.zonesCfg.get(meilleur).rang)) meilleur = role;
     };
     for (const z of zones) if (z.forme === 'cercle' && e.distance_m <= z.rayon_m) garder(z.role);
-    if (zones.some((z) => z.forme === 'polygone')) garder(e.zone);
+    if (zones.some((z) => z.forme !== 'cercle')) garder(e.zone);
     return meilleur;
   }
 
@@ -666,6 +782,13 @@ export class OutilCrise {
             geometry: { type: 'Point', coordinates: decaler(evt.centre, z.rayon_m, 0) } });
           f.push({ type: 'Feature', properties: { nature: 'libelle', couleur: zc.couleur, texte: `${distance(z.rayon_m)} · ${zc.libelle}` },
             geometry: { type: 'Point', coordinates: decaler(evt.centre, 0, z.rayon_m) } });
+        } else if (z.forme === 'couloir') {
+          const calcul = this.resultat?.zones?.[i];
+          const geom = calcul?.forme === 'couloir' && calcul.tampon_m === z.tampon_m ? calcul.geometrie : null;
+          if (geom) f.push({ type: 'Feature', properties: props, geometry: geom });
+          f.push({ type: 'Feature', properties: { nature: 'saisie', couleur: zc.couleur }, geometry: { type: 'LineString', coordinates: z.coordonnees } });
+          f.push({ type: 'Feature', properties: { nature: 'libelle', couleur: zc.couleur, texte: `${zc.libelle} · ${distance(z.tampon_m)} de part et d'autre` },
+            geometry: { type: 'Point', coordinates: z.coordonnees.reduce((a, q) => (q[1] > a[1] ? q : a)) } });
         } else {
           const anneau = [...z.coordonnees, z.coordonnees[0]];
           f.push({ type: 'Feature', properties: props, geometry: { type: 'Polygon', coordinates: [anneau] } });
@@ -673,6 +796,7 @@ export class OutilCrise {
             geometry: { type: 'Point', coordinates: z.coordonnees.reduce((a, p) => (p[1] > a[1] ? p : a)) } });
         }
       });
+      f.push(...this._ventCarte(cercles.length ? Math.max(...cercles.map((z) => z.rayon_m)) : this.cfg.rayon_defaut_m));
       f.push({ type: 'Feature', properties: { nature: 'centre' }, geometry: { type: 'Point', coordinates: evt.centre } });
       const g = this.glisse;
       if (g?.type === 'rayon' && g.curseur) {
@@ -681,9 +805,9 @@ export class OutilCrise {
           geometry: { type: 'Point', coordinates: g.curseur } });
       }
     }
-    if (this.mode === 'polygone' && this.polygone.length) {
+    if (['polygone', 'couloir'].includes(this.mode) && this.polygone.length) {
       const couleur = this.zonesCfg.get(this.rolePolygone).couleur;
-      const pts = [...this.polygone, ...(this._curseurPolygone ? [this._curseurPolygone] : []), this.polygone[0]];
+      const pts = [...this.polygone, ...(this._curseurPolygone ? [this._curseurPolygone] : []), ...(this.mode === 'polygone' ? [this.polygone[0]] : [])];
       f.push({ type: 'Feature', properties: { nature: 'saisie', couleur }, geometry: { type: 'LineString', coordinates: pts } });
     }
     zSrc.setData({ type: 'FeatureCollection', features: f });
@@ -761,7 +885,8 @@ export class OutilCrise {
       touches[k.id] = k.elements.filter((e) => e.zone).map((e) => e.cle);
       for (const e of k.elements) noms[`${k.id}|${e.cle}`] = e.libelle;
     }
-    const description = evt.zones.map((z) => `${this.zonesCfg.get(z.role).libelle} ${z.forme === 'cercle' ? distance(z.rayon_m) : 'polygone'}`).join(', ');
+    const description = evt.zones.map((z) => `${this.zonesCfg.get(z.role).libelle} ${z.forme === 'cercle' ? distance(z.rayon_m)
+      : z.forme === 'couloir' ? `couloir ${distance(z.tampon_m)} de part et d'autre` : 'polygone'}`).join(', ');
     const heure_ = new Date().toISOString();
     if (prec) {
       const ajouts = [];
@@ -929,6 +1054,7 @@ export class OutilCrise {
     this._zoneEtat = el('div');
     this._majEtat();
     sections.push(el('section', { className: 'sig-section' }, el('h3', { textContent: 'Synthèse' }), this._zoneEtat, this._zoneCompteurs));
+    sections.push(this._sectionContexte());
     sections.push(this._sectionSecours());
     sections.push(this._sectionChangements());
     if (this.message) sections.push(el('p', { className: /impossible/.test(this.message) ? 'sig-erreur' : 'sig-info', textContent: this.message }));
@@ -937,6 +1063,23 @@ export class OutilCrise {
     sections.push(this._sectionJournal());
     if (this.resultat) sections.push(this._sources());
     return sections;
+  }
+
+  _sectionContexte() {
+    if (!this.cfg.vent) return null;
+    const v = this.vent;
+    const secteur = el('input', { type: 'checkbox', checked: this.secteurVent });
+    secteur.addEventListener('change', () => {
+      this.secteurVent = secteur.checked;
+      this._noter('contexte', `Secteur sous le vent ${secteur.checked ? 'affiché' : 'masqué'}`);
+      this._dessiner();
+    });
+    return el('section', { className: 'sig-section' }, el('h3', { textContent: 'Vent' }),
+      !v ? el('p', { className: 'sig-info', textContent: 'Mesure en cours…' })
+        : !v.disponible ? el('p', { className: 'sig-erreur', textContent: v.message })
+          : el('div', {}, el('p', { textContent: this._texteVent(v) }),
+            el('label', { className: 'sig-option' }, secteur, ` Secteur sous le vent (${nf(v.secteur_deg)}°, indicatif)`),
+            el('p', { className: 'sig-info', textContent: `${v.source || 'Open-Meteo'} — indication simple, pas un modèle de dispersion.` })));
   }
 
   _sectionSecours() {
@@ -1014,7 +1157,7 @@ export class OutilCrise {
   }
 
   _sectionLieu() {
-    const q = el('input', { className: 'sig-champ', type: 'search', placeholder: 'Station ou accès (ex. : Bastille)' });
+    const q = el('input', { className: 'sig-champ', type: 'search', placeholder: this.cfg.adresses ? 'Station, accès ou adresse (ex. : Bastille, 12 rue de la Roquette)' : 'Station ou accès (ex. : Bastille)' });
     const res = el('ul', { className: 'sig-crise-liste' });
     let jeton = 0;
     q.addEventListener('input', async () => {
@@ -1027,7 +1170,8 @@ export class OutilCrise {
           const b = el('button', { type: 'button', className: 'sig-lien', textContent: `${l.type} : ${l.libelle}` });
           b.addEventListener('click', () => this.centrerSur(l.position));
           return el('li', {}, b);
-        }));
+        }), ...(r.anomalie ? [el('li', { className: 'sig-info', textContent: r.anomalie })] : []),
+        ...(!r.resultats.length && !r.anomalie ? [el('li', { className: 'sig-info', textContent: 'Aucun résultat.' })] : []));
       } catch (e) {
         res.replaceChildren(el('li', { className: 'sig-erreur', textContent: e.message }));
       }
@@ -1042,8 +1186,10 @@ export class OutilCrise {
     });
     return el('section', { className: 'sig-section' }, el('h3', { textContent: 'Lieu de l’événement' }),
       el('p', { className: 'sig-crise-consigne', textContent: 'Cliquez sur la carte au lieu de l’événement et, sans relâcher, glissez pour tracer le cercle.' }),
-      el('p', { className: 'sig-info', textContent: 'Ou cherchez une station :' }), q, res,
-      el('p', { className: 'sig-info', textContent: 'Ou saisissez des coordonnées :' }), el('div', { className: 'sig-crise-ligne' }, coords, ok), erreur);
+      el('p', { className: 'sig-info', textContent: this.cfg.adresses ? 'Ou cherchez une station ou une adresse :' : 'Ou cherchez une station :' }), q, res,
+      el('p', { className: 'sig-info', textContent: 'Ou saisissez des coordonnées :' }), el('div', { className: 'sig-crise-ligne' }, coords, ok), erreur,
+      el('p', { className: 'sig-info', textContent: 'Ou reprenez un périmètre existant :' }), this._boutonImport(),
+      this.message ? el('p', { className: /impossible/.test(this.message) ? 'sig-erreur' : 'sig-info', textContent: this.message }) : null);
   }
 
   _sectionZones() {
@@ -1055,6 +1201,17 @@ export class OutilCrise {
       const suppr = el('button', { type: 'button', className: 'sig-lien', textContent: 'Supprimer', title: 'Supprimer cette zone' });
       suppr.addEventListener('click', () => this.supprimerZone(i));
       const tete = el('div', { className: 'sig-crise-zone__tete' }, el('span', { className: 'sig-legende__pastille', style: `background:${zc.couleur}` }), role, suppr);
+      if (z.forme === 'couloir') {
+        const tampon = el('input', { className: 'sig-champ sig-crise-rayon', type: 'number', min: 1, max: 2000, step: 1, value: Math.round(z.tampon_m) });
+        tampon.addEventListener('change', () => {
+          const v = Number(tampon.value);
+          if (v > 0 && v <= 2000) this.modifierZone(i, { tampon_m: v });
+        });
+        const long = this.resultat?.zones?.[i]?.longueur_m;
+        return el('div', { className: 'sig-crise-zone' }, tete,
+          el('p', { className: 'sig-info', textContent: `Couloir de ${z.coordonnees.length} sommets${long ? `, ${distance(long)} de long` : ''}` }),
+          el('div', { className: 'sig-crise-ligne' }, el('span', { textContent: 'De part et d’autre (m)' }), tampon));
+      }
       if (z.forme !== 'cercle') return el('div', { className: 'sig-crise-zone' }, tete, el('p', { className: 'sig-info', textContent: `Polygone de ${z.coordonnees.length} sommets` }));
       const rayon = el('input', { className: 'sig-champ sig-crise-rayon', type: 'number', min: 1, max: this.cfg.rayon_max_m, step: 1, value: Math.round(z.rayon_m) });
       rayon.addEventListener('change', () => {
@@ -1074,17 +1231,21 @@ export class OutilCrise {
     const rolePoly = el('select', { className: 'sig-champ sig-crise-role' }, ...this.cfg.zones.map((x) => el('option', { value: x.id, textContent: x.libelle, selected: x.id === this.rolePolygone })));
     rolePoly.addEventListener('change', () => { this.rolePolygone = rolePoly.value; this._dessiner(); });
     const poly = el('button', { type: 'button', className: `sig-bouton${this.mode === 'polygone' ? ' sig-bouton--actif' : ''}`, textContent: this.mode === 'polygone' ? 'Polygone : cliquez les sommets…' : '+ Polygone' });
-    poly.addEventListener('click', () => this.commencerPolygone());
+    poly.addEventListener('click', () => this.commencerPolygone('polygone'));
+    const couloir = el('button', { type: 'button', className: `sig-bouton${this.mode === 'couloir' ? ' sig-bouton--actif' : ''}`,
+      title: 'Zone le long d’une ligne (canalisation, voie, cortège) : tracez l’axe', textContent: this.mode === 'couloir' ? 'Couloir : cliquez l’axe…' : '+ Couloir' });
+    couloir.addEventListener('click', () => this.commencerPolygone('couloir'));
     const replacer = el('button', { type: 'button', className: 'sig-lien', textContent: 'Replacer l’événement' });
     replacer.addEventListener('click', () => this.placer());
     const masque = el('input', { type: 'checkbox', checked: this.assombrir });
     masque.addEventListener('change', () => { this.assombrir = masque.checked; this._dessiner(); });
     return el('section', { className: 'sig-section' }, el('h3', { textContent: 'Zones' }), ...lignes,
-      el('div', { className: 'sig-groupe-boutons' }, cercle, poly), this.mode === 'polygone' ? el('div', { className: 'sig-crise-ligne' }, el('span', { textContent: 'Rôle' }), rolePoly) : null,
-      el('p', { className: 'sig-info', textContent: this.mode === 'polygone'
-        ? 'Cliquez les sommets ; double-clic ou Entrée pour fermer ; Échap pour annuler.'
+      el('div', { className: 'sig-groupe-boutons' }, cercle, poly, couloir), ['polygone', 'couloir'].includes(this.mode) ? el('div', { className: 'sig-crise-ligne' }, el('span', { textContent: 'Rôle' }), rolePoly) : null,
+      el('p', { className: 'sig-info', textContent: ['polygone', 'couloir'].includes(this.mode)
+        ? `Cliquez les sommets ${this.mode === 'couloir' ? 'de l’axe' : ''} ; double-clic ou Entrée pour terminer ; Échap pour annuler.`
         : 'Tirez la poignée blanche pour changer le rayon (Maj : au mètre près), le point rouge pour déplacer l’événement. Ctrl+Z : annuler.' }),
-      el('div', { className: 'sig-options' }, el('label', { className: 'sig-option' }, masque, ' Assombrir l’extérieur'), replacer));
+      el('div', { className: 'sig-options' }, el('label', { className: 'sig-option' }, masque, ' Assombrir l’extérieur'), replacer),
+      el('div', { className: 'sig-groupe-boutons' }, this._boutonImport()));
   }
 
   _tableCompteurs() {

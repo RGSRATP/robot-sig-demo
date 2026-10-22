@@ -571,8 +571,17 @@ def crise_analyse(demande: dict = Body(..., examples=[{"centre": [2.3691, 48.853
 
 @routeur.get("/crise/lieux")
 def crise_lieux(q: str = Query(..., min_length=2, max_length=80), cfg: dict = Depends(_crise)):
-    """Stations et accès dont le nom contient le texte (placement de l'événement)."""
-    return {"resultats": crise_sig.lieux(cfg, q)}
+    """Stations et accès dont le nom contient le texte, puis adresses (géocodage IGN) : placement de l'événement."""
+    from . import crise_externe
+    adresses, anomalie = crise_externe.adresses(cfg, q)
+    return {"resultats": crise_sig.lieux(cfg, q) + adresses, "anomalie": anomalie}
+
+
+@routeur.get("/crise/vent")
+def crise_vent(lon: float = Query(..., ge=-180, le=180), lat: float = Query(..., ge=-90, le=90), cfg: dict = Depends(_crise)):
+    """Vent actuel au point de l'événement (Open-Meteo) : flèche et secteur indicatif « sous le vent »."""
+    from . import crise_externe
+    return crise_externe.vent(cfg, lon, lat)
 
 
 @routeur.get("/crise/evenements")

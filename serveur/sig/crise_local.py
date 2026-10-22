@@ -28,7 +28,10 @@ from .config import RACINE
 from .esri import ErreurService
 
 CARREAU_DEFAUT_M = 500
-REQUETES_PARALLELES = 4
+REQUETES_PARALLELES = 2
+REQUETES_PAR_SECONDE = 4.0     # Géoplateforme : HTTP 429 au-delà d'un débit par poste (constaté le 2026-10-22)
+REPRISES_DEBIT = 3             # tours de reprise des carreaux refusés pour débit
+ATTENTE_REPRISE_S = 2.0
 MAX_OBJETS_CARREAU = 20000     # garde-fou par carreau (au-delà : carreau tronqué, signalé)
 MEMOIRE = 12                   # assemblages de carreaux gardés en mémoire (technique)
 
@@ -39,6 +42,8 @@ _memoire: OrderedDict = OrderedDict()     # (source, carreaux, dates) -> objets 
 _entetes: dict = {}                       # fichier de carreau -> (date de modification, {date, tronque})
 _fils: list[threading.Thread] = []
 _creneaux: threading.BoundedSemaphore | None = None   # requêtes simultanées, toutes sources confondues
+_verrou_cadence = threading.Lock()
+_derniere = [0.0]                                     # instant de la dernière requête (débit plafonné)
 
 
 def controler(c: dict, erreur) -> None:
@@ -162,31 +167,52 @@ def telecharger_carreau(cfg: dict, s: dict, c: tuple[int, int], client) -> dict:
 
 
 def _charger(cfg: dict, s: dict, liste: list[tuple[int, int]], fabrique) -> None:
-    """Téléchargement des carreaux en arrière-plan (quelques requêtes en parallèle)."""
+    """Téléchargement des carreaux en arrière-plan : quelques requêtes en parallèle, débit plafonné. Les carreaux
+    refusés pour débit (HTTP 429, après les nouveaux essais du connecteur) sont repris aussitôt, un par un : ils
+    restent « en cours » jusque-là (jamais 10 minutes de données manquantes pour un refus passager)."""
+    reste = list(liste)
     try:
         with fabrique(cfg) as client:
-            def un(c):
-                try:
-                    with _creneau(cfg):   # le service limite le débit par poste (HTTP 429)
-                        telecharger_carreau(cfg, s, c, client)
-                    with _verrou:
-                        _echecs.pop((s["id"], c), None)
-                except (ErreurService, OSError) as e:
-                    with _verrou:
-                        _echecs[(s["id"], c)] = (time.monotonic(), str(e))
-                except Exception as e:   # un carreau ne doit jamais arrêter les autres
-                    with _verrou:
-                        _echecs[(s["id"], c)] = (time.monotonic(), f"erreur inattendue ({type(e).__name__} : {e})")
-                finally:
-                    with _verrou:
-                        _en_cours.discard((s["id"], c))
-            paralleles = int(cfg["crise"].get("requetes_paralleles") or REQUETES_PARALLELES)
-            with ThreadPoolExecutor(max_workers=paralleles) as pool:
-                list(pool.map(un, liste))
+            for tour in range(REPRISES_DEBIT + 1):
+                refuses = []
+
+                def un(c):
+                    try:
+                        with _creneau(cfg):   # le service limite le débit par poste (HTTP 429)
+                            _cadence(cfg)
+                            telecharger_carreau(cfg, s, c, client)
+                        with _verrou:
+                            _echecs.pop((s["id"], c), None)
+                    except (ErreurService, OSError) as e:
+                        if "HTTP 429" in str(e):
+                            refuses.append(c)
+                        with _verrou:
+                            _echecs[(s["id"], c)] = (time.monotonic(), str(e))
+                    except Exception as e:   # un carreau ne doit jamais arrêter les autres
+                        with _verrou:
+                            _echecs[(s["id"], c)] = (time.monotonic(), f"erreur inattendue ({type(e).__name__} : {e})")
+
+                paralleles = int(cfg["crise"].get("requetes_paralleles") or REQUETES_PARALLELES) if tour == 0 else 1
+                with ThreadPoolExecutor(max_workers=paralleles) as pool:
+                    list(pool.map(un, reste))
+                if not refuses or tour == REPRISES_DEBIT:
+                    break
+                reste = refuses
+                time.sleep(ATTENTE_REPRISE_S * (tour + 1))
     finally:
         with _verrou:
             for c in liste:
                 _en_cours.discard((s["id"], c))
+
+
+def _cadence(cfg: dict) -> None:
+    """Débit plafonné (requêtes par seconde, toutes sources confondues) : le service répond 429 au-delà."""
+    debit = float(cfg["crise"].get("requetes_par_seconde") or REQUETES_PAR_SECONDE)
+    with _verrou_cadence:
+        attente = _derniere[0] + 1 / debit - time.monotonic()
+        if attente > 0:
+            time.sleep(attente)
+        _derniere[0] = time.monotonic()
 
 
 def _creneau(cfg: dict) -> threading.BoundedSemaphore:
@@ -244,7 +270,10 @@ def objets(cfg: dict, s: dict, centre_l93: tuple[float, float], fabrique=reseau.
         d = _entete(_fichier(cfg, s, c))
         with _verrou:
             echec = _echecs.get((s["id"], c))
-        if d is not None:
+            en_cours = (s["id"], c) in _en_cours
+        if en_cours and d is None:
+            manquants.append(c)
+        elif d is not None:
             lus[c] = d
             age = (datetime.now() - datetime.fromisoformat(d["date"])).total_seconds() if d.get("date") else math.inf
             if age > validite and not (echec and maintenant - echec[0] < nouvel_essai):

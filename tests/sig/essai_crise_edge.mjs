@@ -148,6 +148,44 @@ try {
   }
   log('E journal après exports :', await evaluer(`[...document.querySelectorAll('.sig-crise-journal li')].slice(0, 3).map((l) => l.textContent).join(' / ')`));
   log('E erreurs :', await evaluer(`[...document.querySelectorAll('.sig-erreur')].map((x) => x.textContent).join(' | ')`));
+
+  // F — lot C3 : adresse, données autour du point (rues, bouclage, estimations), vent, couloir, import du périmètre
+  await cliquerTexte('Fermer l’événement');
+  await pause(800);
+  await nouveau('Fuite de gaz rue de la Roquette');
+  await chercher('12 rue de la Roquette', 'Adresse : 12 Rue de la Roquette 75011');
+  await attendre();
+  for (let i = 0; i < 120 && (await synthese()).includes('chargement…'); i++) await pause(1000);   // carreaux autour du point
+  await pause(1500);
+  log('F synthèse :', await synthese());
+  log('F vent :', await evaluer(`[...document.querySelectorAll('.sig-section')].find((x) => x.querySelector('h3')?.textContent === 'Vent')?.innerText.replace(/\\n/g, ' / ')`));
+  log('F bouclage :', (await evaluer(`${categorie('Points de bouclage')}?.innerText`))?.slice(0, 300).replace(/\n/g, ' / '));
+  log('F notes :', await evaluer(`[...document.querySelectorAll('.sig-section p.sig-info')].map((p) => p.textContent).filter((t) => t.startsWith('Population') || t.startsWith('*')).join(' / ')`));
+  await evaluer(`(() => { const l = [...document.querySelectorAll('label.sig-option')].find((x) => x.textContent.includes('Secteur sous le vent')); l?.querySelector('input').click(); return !!l; })()`);
+  await pause(800);
+  await photo('crise_F1_roquette.png');
+  // couloir : axe de deux sommets tracé sur la carte, puis Entrée
+  await cliquerTexte('+ Couloir');
+  await pause(300);
+  for (const [dx, dy] of [[-220, 120], [220, -140]]) { await souris('mousePressed', x + dx, y + dy, 1); await souris('mouseReleased', x + dx, y + dy, 0); await pause(400); }
+  await cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await cmd('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await attendre();
+  log('F zones :', await evaluer(`[...document.querySelectorAll('.sig-crise-zone')].map((z) => z.innerText.replace(/\\n/g, ' ')).join(' | ')`));
+  await photo('crise_F2_couloir.png');
+  // import du périmètre exporté au scénario E (aller-retour du GeoJSON)
+  await cliquerTexte('Fermer l’événement');
+  await pause(800);
+  await nouveau('Import du périmètre C2');
+  const racine = await cmd('DOM.getDocument', {});
+  const champ = await cmd('DOM.querySelector', { nodeId: racine.result.root.nodeId, selector: 'input[type=file]' });
+  await cmd('DOM.setFileInputFiles', { nodeId: champ.result.nodeId, files: [join(sortie, 'perimetre_Explosion_Bastille_C2.geojson')] });
+  await pause(1000);
+  await attendre();
+  log('F import :', await evaluer(`[...document.querySelectorAll('.sig-crise-zone')].map((z) => z.innerText.replace(/\\n/g, ' ')).join(' | ')`));
+  log('F journal :', await evaluer(`[...document.querySelectorAll('.sig-crise-journal li')].slice(0, 3).map((l) => l.textContent).join(' / ')`));
+  await photo('crise_F3_import.png');
+  log('F erreurs :', await evaluer(`[...document.querySelectorAll('.sig-erreur')].map((x) => x.textContent).join(' | ')`));
 } catch (e) {
   log('ERREUR', e.message);
 } finally {

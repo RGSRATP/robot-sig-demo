@@ -33,7 +33,7 @@ def _cfg(tmp_path, **sources):
         "crise": {
             "dossier_travail": str(tmp_path / "travail"), "dossier_cache": str(tmp_path / "cache"),
             "rayon_max_m": 3000, "rayon_defaut_m": 500, "pas_m": 10, "raccourcis_m": [500], "rattachement_acces_m": 250,
-            "types": ["Explosion"], "zones": ZONES_CFG, "requetes_paralleles": 2,
+            "types": ["Explosion"], "zones": ZONES_CFG, "requetes_paralleles": 2, "requetes_par_seconde": 1000,
             "sources_locales": [
                 {"id": "rues", "libelle": "Rues (test)", "url": WFS, "couche": "rues", "rayon_m": 1500, "carreau_m": 1000},
                 {"id": "bati", "libelle": "Bâtiments (test)", "url": WFS, "couche": "bati", "rayon_m": 1500, "carreau_m": 1000},
@@ -177,6 +177,16 @@ def test_trop_de_requetes_nouvel_essai(tmp_path):
     assert sum(1 for q in faux.requetes if q.url.params.get("TYPENAMES")) >= 3
 
 
+def test_refus_de_debit_persistant_repris_en_arriere_plan(tmp_path, monkeypatch):
+    # 6 refus de suite : au-delà des nouveaux essais du connecteur (3) ; le carreau est repris aussitôt, un par
+    # un, et reste « en cours » pendant ce temps (jamais compté en échec pour un refus passager)
+    monkeypatch.setattr(crise_local, "ATTENTE_REPRISE_S", 0)
+    faux = FauxWfs(trop_de_requetes=6)
+    r = _analyse(_cfg(tmp_path), [{"role": "evacuation", "rayon_m": 500}], faux)
+    assert r["anomalies"] == [] and r["chargement"] == []
+    assert _mesure(r, "bati", "n")["par_zone"]["evacuation"] == 2
+
+
 def test_service_en_panne_signale_sans_bloquer(tmp_path):
     faux = FauxWfs(panne_couches={"bati"})
     r = _analyse(_cfg(tmp_path), [{"role": "evacuation", "rayon_m": 500}], faux)
@@ -302,3 +312,126 @@ def test_configuration_du_projet_valide():
     roles = {k["id"]: k.get("role") for k in cfg["crise"]["categories"]}
     assert roles["rues"] == "rues" and roles["bouclage"] == "bouclage" and roles["population"] == "denombrement"
     assert {s["id"] for s in cfg["crise"]["sources_locales"]} == {"rues", "batiments", "population"}
+
+
+# ---------------------------------------------------------------- couloir le long d'une ligne
+
+def _couloir(tampon=100):
+    return {"role": "fermeture", "forme": "couloir", "tampon_m": tampon,
+            "coordonnees": [crise.vers_wgs84(X0 - 1000, Y0 + 300), crise.vers_wgs84(X0 + 1000, Y0 + 300)]}
+
+
+def test_couloir_le_long_d_une_ligne(tmp_path):
+    r = _analyse(_cfg(tmp_path), [_couloir(100)], FauxWfs())
+    z = r["zones"][0]
+    assert z["forme"] == "couloir" and z["longueur_m"] == 2000 and z["tampon_m"] == 100
+    assert z["surface_m2"] == pytest.approx(2000 * 200 + math.pi * 100 ** 2, rel=0.01)
+    assert z["geometrie"]["type"] == "Polygon"
+    rues = {e["libelle"]: e for e in _cat(r, "rues")["elements"] if e["zone"]}
+    # la rue nord-sud (x = +100) traverse le couloir (y de 200 à 400) ; le boulevard (y = 0) est à 200 m de l'axe
+    assert "R DROITE" in rues and "BD TEST" not in rues
+    assert rues["R DROITE"]["longueur_zone_m"] == pytest.approx(200, abs=1)
+    # points de bouclage : la rue nord-sud coupe le couloir deux fois (côtés nord et sud)
+    assert sorted(e["libelle"] for e in _cat(r, "bouclage")["elements"]) == ["R DROITE", "R DROITE", "Voie sans nom (Rond-point)",
+                                                                               "Voie sans nom (Rond-point)"]
+
+
+def test_couloir_mal_forme_refuse(tmp_path):
+    cfg = _cfg(tmp_path)
+    with pytest.raises(crise.ErreurCrise, match="2 sommets"):
+        crise.analyser(cfg, CENTRE, [{**_couloir(), "coordonnees": [CENTRE]}], fabrique=FauxWfs().fabrique)
+    with pytest.raises(crise.ErreurCrise, match="tampon_m"):
+        crise.analyser(cfg, CENTRE, [_couloir(0)], fabrique=FauxWfs().fabrique)
+
+
+def test_couloir_enregistre_et_exporte_en_excel(tmp_path):
+    from openpyxl import load_workbook
+    import io
+    cfg = _cfg(tmp_path)
+    _analyse(cfg, [_couloir(100), {"role": "evacuation", "rayon_m": 500}], FauxWfs())   # données chargées
+    evt = {"titre": "Fuite", "mode": "exercice", "centre": CENTRE, "zones": [_couloir(100), {"role": "evacuation", "rayon_m": 500}]}
+    assert crise.enregistrer(cfg, evt)["zones"][0]["forme"] == "couloir"
+    wb = load_workbook(io.BytesIO(crise.classeur(cfg, evt)))
+    lignes = [[c.value for c in row] for row in wb["Synthèse"].iter_rows()]
+    assert any(l[0] == "Fermeture" and "couloir de 2 000 m" in str(l[1]) for l in lignes)
+    hab = next(l for l in lignes if l[0] == "Population : Habitants")
+    # colonnes dans l'ordre des zones : évacuation (cercle de 500 m : carreau central + moitié du carreau coupé),
+    # fermeture (couloir à 200-400 m au nord : aucun carreau)
+    assert hab[1] == pytest.approx(1200, abs=8) and hab[2] == 0
+    assert any(l[0] == "Bâtiments : Logements" for l in lignes)
+
+
+# ---------------------------------------------------------------- adresses et vent
+
+def _faux_service(reponse, statut=200):
+    requetes = []
+
+    def fabrique(cfg):
+        def repondre(r):
+            requetes.append(r)
+            return httpx.Response(statut, json=reponse)
+        return httpx.Client(transport=httpx.MockTransport(repondre))
+    return fabrique, requetes
+
+
+def test_adresses_dans_l_emprise(tmp_path):
+    from serveur.sig import crise_externe
+    cfg = _cfg(tmp_path, geocodage={"url": "https://geo.test/search", "limite": 2, "emprise_wgs84": [1.4, 48.1, 3.6, 49.3]})
+    fabrique, req = _faux_service({"features": [
+        {"geometry": {"coordinates": [2.3707, 48.8536]}, "properties": {"label": "12 Rue de la Roquette 75011 Paris", "type": "housenumber"}},
+        {"geometry": {"coordinates": [5.0, 45.0]}, "properties": {"label": "12 Rue de la Roquette 69000 Lyon", "type": "housenumber"}},
+        {"geometry": {"coordinates": [2.36, 48.86]}, "properties": {"label": "Le Marais", "type": "locality"}},
+        {"geometry": {"coordinates": [2.37, 48.85]}, "properties": {"label": "Au-delà de la limite", "type": "street"}},
+    ]})
+    r, anomalie = crise_externe.adresses(cfg, "12 rue de la roquette", fabrique=fabrique)
+    assert anomalie is None
+    assert [x["libelle"] for x in r] == ["12 Rue de la Roquette 75011 Paris", "Le Marais"]   # Lyon écarté, limite 2
+    assert r[0]["type"] == "Adresse" and r[1]["type"] == "Lieu"
+    assert req[0].url.params["q"] == "12 rue de la roquette"
+    assert crise_externe.adresses(cfg, "ab", fabrique=fabrique) == ([], None)   # trop court : pas d'appel
+
+
+def test_adresses_service_injoignable_signale(tmp_path):
+    from serveur.sig import crise_externe
+    cfg = _cfg(tmp_path, geocodage={"url": "https://geo.test/search"})
+    fabrique, _ = _faux_service({}, statut=502)
+    r, anomalie = crise_externe.adresses(cfg, "bastille", fabrique=fabrique)
+    assert r == [] and "indisponible" in anomalie and "502" in anomalie
+
+
+def test_vent_au_point_garde_en_cache(tmp_path):
+    from serveur.sig import crise_externe
+    cfg = _cfg(tmp_path, vent={"source": "meteo", "secteur_deg": 60})
+    cfg["temps_reel"] = [{"id": "meteo", "type": "open_meteo", "libelle": "Météo", "url": "https://meteo.test/v1"}]
+    fabrique, req = _faux_service({"current": {"time": "2026-10-22T11:15", "wind_speed_10m": 17.1,
+                                               "wind_direction_10m": 210, "wind_gusts_10m": 44.3}})
+    v = crise_externe.vent(cfg, 2.3691, 48.8532, fabrique=fabrique)
+    assert v["disponible"] and v["direction_deg"] == 210 and v["vitesse_kmh"] == 17.1 and v["rafales_kmh"] == 44.3
+    assert v["secteur_deg"] == 60 and v["heure"] == "2026-10-22T11:15"
+    crise_externe.vent(cfg, 2.3693, 48.8531, fabrique=fabrique)   # même point à 30 m près : cache
+    assert len(req) == 1
+    assert req[0].url.params["current"].startswith("wind_speed_10m")
+
+
+def test_vent_indisponible_signale(tmp_path):
+    from serveur.sig import crise_externe
+    cfg = _cfg(tmp_path, vent={"source": "absente"})
+    assert not crise_externe.vent(cfg, 2.3, 48.8)["disponible"]
+    cfg = _cfg(tmp_path, vent={"source": "meteo"})
+    cfg["temps_reel"] = [{"id": "meteo", "type": "open_meteo", "url": "https://meteo.test/v1"}]
+    fabrique, _ = _faux_service({"current": {}})
+    assert "vent absent" in crise_externe.vent(cfg, 2.3, 48.8, fabrique=fabrique)["message"]
+
+
+# ---------------------------------------------------------------- import de périmètre (interface, node:test)
+
+def test_import_de_perimetre_interface():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js absent du poste")
+    fichier = Path(__file__).with_name("test_crise_import.mjs")
+    r = subprocess.run([node, "--test", str(fichier)], capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]

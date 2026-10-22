@@ -32,10 +32,10 @@ from pathlib import Path
 import numpy as np
 import shapely
 from pyproj import Transformer
-from shapely.geometry import Point, Polygon, mapping
+from shapely.geometry import LineString, Point, Polygon, mapping
 from shapely.ops import nearest_points, unary_union
 
-from . import crise_local
+from . import crise_externe, crise_local
 from . import inventaire as inv_sig
 from . import objets as obj_sig
 
@@ -43,6 +43,7 @@ _VERS_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
 _VERS_WGS84 = Transformer.from_crs(2154, 4326, always_xy=True)
 ROLES = ("points", "stations", "acces", "lignes", "plai", "maquettes", "secours", "rues", "bouclage", "denombrement")
 ROLES_LOCAUX = ("rues", "bouclage", "denombrement")   # objets d'une source autour de l'événement (crise_local)
+TAMPON_MAX_M = 2000       # couloir : tampon de part et d'autre de l'axe
 FUSION_BOUCLAGE_M = 30     # points de bouclage d'une même voie plus proches que cela : un seul point
 PAS_COURBE_M = 25          # pas des courbes de dénombrement (compteurs en direct pendant le glissement)
 DIRECTIONS = ("N", "NE", "E", "SE", "S", "SO", "O", "NO")
@@ -98,6 +99,7 @@ def controler(c, erreur) -> None:
             raise erreur(f"« crise.zones » : identifiant « {z['id']} » en double")
         ids.add(z["id"])
     crise_local.controler(c, erreur)
+    crise_externe.controler(c, erreur)
     ids_locales = {s["id"] for s in c.get("sources_locales", [])}
     cats = c.get("categories")
     if not (isinstance(cats, list) and cats):
@@ -184,6 +186,8 @@ def config_interface(cfg: dict) -> dict | None:
                         "statuts": k.get("statuts") or [x["id"] for x in statuts(cfg)]} for k in c["categories"]],
         "statuts": statuts(cfg),
         "auteur_defaut": auteur_poste(),
+        "vent": bool(c.get("vent")), "adresses": bool(c.get("geocodage")),
+        "tampon_couloir_m": c.get("tampon_couloir_m", 100),
         "avertissement": c.get("avertissement", ""),
     }
 
@@ -258,8 +262,24 @@ def zones_geometriques(zones: list[dict], centre_l93: tuple[float, float], roles
             if geom.area <= 0:
                 raise ErreurCrise(f"zone n° {i} : polygone de surface nulle")
             sortie.append({"role": role, "rang": roles.index(role), "forme": "polygone", "rayon_m": None, "geom": geom})
+        elif forme == "couloir":
+            # le long d'une ligne (canalisation, voie, cortège) : tampon de part et d'autre de l'axe (lot C3)
+            pts, t = z.get("coordonnees"), z.get("tampon_m")
+            if not (isinstance(pts, list) and len(pts) >= 2):
+                raise ErreurCrise(f"zone n° {i} : couloir : axe d'au moins 2 sommets [lon, lat] attendu")
+            if not isinstance(t, (int, float)) or isinstance(t, bool) or not 0 < t <= TAMPON_MAX_M:
+                raise ErreurCrise(f"zone n° {i} : couloir : « tampon_m » attendu entre 0 et {TAMPON_MAX_M} m")
+            try:
+                axe = LineString([vers_l93(float(p[0]), float(p[1])) for p in pts])
+            except (TypeError, ValueError, IndexError) as e:
+                raise ErreurCrise(f"zone n° {i} : sommets [lon, lat] attendus") from e
+            if axe.length <= 0:
+                raise ErreurCrise(f"zone n° {i} : couloir de longueur nulle")
+            geom = axe.buffer(float(t), quad_segs=SEGMENTS_CERCLE // 4)
+            sortie.append({"role": role, "rang": roles.index(role), "forme": "couloir", "rayon_m": None, "geom": geom,
+                           "tampon_m": float(t), "longueur_m": axe.length})
         else:
-            raise ErreurCrise(f"zone n° {i} : forme « {forme} » inconnue (cercle ou polygone)")
+            raise ErreurCrise(f"zone n° {i} : forme « {forme} » inconnue (cercle, polygone ou couloir)")
     return sortie
 
 
@@ -572,7 +592,7 @@ def _analyser_lignes(cat, objets, centre, zones):
         if e["zone"] and union is not None:
             zone = next(z for z in zones if z["role"] == e["zone"])
             trace = unary_union([m["geom"] for m in membres])
-            e["longueur_zone_m"] = round(trace.intersection(zone["geom"]).length) if zone["forme"] == "polygone" else \
+            e["longueur_zone_m"] = round(trace.intersection(zone["geom"]).length) if zone["forme"] != "cercle" else \
                 round(trace.intersection(Point(centre).buffer(zone["rayon_m"], quad_segs=SEGMENTS_CERCLE)).length)
             e["geometrie"] = geojson_wgs84(trace.intersection(union))
             e["detail"] = f"{e['longueur_zone_m']:,} m de voie dans la zone".replace(",", " ")
@@ -875,7 +895,10 @@ def analyser(cfg: dict, centre_wgs84: list[float], zones: list[dict], fabrique=N
     return {
         "centre": {"wgs84": [lon, lat], "l93": [round(centre_l93[0], 2), round(centre_l93[1], 2)]},
         "rayon_max_m": c["rayon_max_m"],
-        "zones": [{"role": z["role"], "forme": z["forme"], "rayon_m": z["rayon_m"], "surface_m2": round(z["geom"].area)}
+        "zones": [{"role": z["role"], "forme": z["forme"], "rayon_m": z["rayon_m"], "surface_m2": round(z["geom"].area),
+                   # couloir : dessiné par l'interface à partir de la géométrie calculée ici (tampon en Lambert 93)
+                   **({"tampon_m": z["tampon_m"], "longueur_m": round(z["longueur_m"]), "geometrie": geojson_wgs84(z["geom"], 0.5)}
+                      if z["forme"] == "couloir" else {})}
                   for z in zg],
         "categories": categories,
         "sources": sources,
@@ -1030,6 +1053,7 @@ def reinitialiser() -> None:
         _candidats.clear()
         _parts_courbes.clear()
     crise_local.reinitialiser()
+    crise_externe.reinitialiser()
 
 
 # ---------------------------------------------------------------- export Excel (lot C2)
@@ -1111,7 +1135,8 @@ def classeur(cfg: dict, evt: dict) -> bytes:
     ws.cell(ws.max_row, 1).font = gras
     for z in r["zones"]:
         ws.append([zones[z["role"]]["libelle"], f"cercle de {z['rayon_m']:g} m" if z["forme"] == "cercle"
-                   else f"polygone de {z['surface_m2'] / 1e4:.2f} ha"])
+                   else f"couloir de {z['longueur_m']:,} m, {z['tampon_m']:g} m de part et d'autre".replace(",", " ")
+                   if z["forme"] == "couloir" else f"polygone de {z['surface_m2'] / 1e4:.2f} ha"])
         teinter(ws.cell(ws.max_row, 1), z["role"])
     ws.append([])
     actifs = [z["id"] for z in c["zones"] if any(x["role"] == z["id"] for x in r["zones"])]
