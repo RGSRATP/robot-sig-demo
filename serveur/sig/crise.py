@@ -1119,6 +1119,13 @@ def classeur(cfg: dict, evt: dict) -> bytes:
     for cell in ws[ws.max_row]:
         cell.font = gras
     for k in r["categories"]:
+        if k["role"] == "denombrement":   # estimations (population, bâtiments) : valeurs par zone, pas d'éléments
+            if k.get("en_cours"):
+                ws.append([k["libelle"], "chargement en cours : relancer l'export dans quelques secondes"])
+            for m in k.get("mesures", []):
+                a = m.get("arrondi") or 1
+                ws.append([f"{k['libelle']} : {m['libelle']}", *[round(m["par_zone"].get(i, 0) / a) * a for i in actifs]])
+            continue
         n = [sum(1 for e in k["elements"] if e["zone"] == i) for i in actifs]
         decides = sum(1 for e in k["elements"] if e["zone"]
                       and (decisions.get(f"{k['id']}|{e['cle']}") or {}).get("statut", defaut) != defaut)

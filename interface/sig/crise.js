@@ -17,6 +17,9 @@ const MAX_LISTE = 40;             // éléments montrés par catégorie (les aut
 const COULEUR_EVENEMENT = '#c92a2a';
 const COULEUR_REMPLACEMENT = '#2b8a3e';
 const DELAI_ANALYSE_MS = 60000;   // au-delà : abandon, message et bouton « Relancer »
+const RELANCE_CHARGEMENT_MS = 2500;   // données autour du point en cours de chargement : analyse relancée
+const ROLES_TRACES = ['lignes', 'rues'];        // dessinés par leur tracé dans la zone, sans pictogramme
+const ROLES_SANS_DIRECT = ['lignes', 'rues', 'bouclage', 'secours', 'denombrement'];   // masqués pendant le glissement
 
 const nf = (v, d = 0) => Number(v).toLocaleString('fr-FR', { maximumFractionDigits: d });
 const distance = (m) => (m >= 1000 ? `${nf(m / 1000, 2)} km` : `${nf(m)} m`);
@@ -130,8 +133,12 @@ export class OutilCrise {
     c.addLayer({ id: 'sig-crise-secours-distance', type: 'symbol', source: SOURCE_ELEMENTS, filter: ['==', ['get', 'nature'], 'distance-secours'],
       layout: { 'text-field': ['get', 'texte'], 'text-font': police, 'text-size': 12.5, 'text-allow-overlap': true },
       paint: { 'text-color': ['get', 'couleur'], 'text-halo-color': '#ffffff', 'text-halo-width': 2.5 } });
+    c.addLayer({ id: 'sig-crise-rues', type: 'line', source: SOURCE_ELEMENTS,
+      filter: ['all', ['==', ['geometry-type'], 'LineString'], ['has', 'fin']],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ['get', 'couleur'], 'line-width': ['interpolate', ['linear'], ['zoom'], 13, 0.8, 17, 2.5], 'line-opacity': 0.55 } });
     c.addLayer({ id: 'sig-crise-lignes', type: 'line', source: SOURCE_ELEMENTS,
-      filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'nature'], 'secours']],
+      filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'nature'], 'secours'], ['!', ['has', 'fin']]],
       layout: { 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'couleur'], 'line-width': 6, 'line-dasharray': [1.5, 1] } });
     c.addLayer({ id: 'sig-crise-ouvrages', type: 'line', source: SOURCE_ELEMENTS, filter: ['==', ['geometry-type'], 'Polygon'],
@@ -402,6 +409,7 @@ export class OutilCrise {
     if (this._sauvegarde) { clearTimeout(this._sauvegarde); this.enregistrer(); }
     this._requete += 1;   // une analyse en cours est ignorée
     this._abandon?.abort();
+    clearTimeout(this._relance);
     clearInterval(this._minuteur);
     this.chargement = false;
     this.erreurAnalyse = null;
@@ -434,7 +442,12 @@ export class OutilCrise {
       const res = await r.json();
       if (n !== this._requete) return;   // une demande plus récente est partie
       this.resultat = res;
-      if (!this.glisse) this._versionner(res);   // pendant le tracé : la version vient au relâchement
+      clearTimeout(this._relance);
+      if (res.chargement?.length) {
+        // rues, bâtiments, population en cours de chargement autour du point : nouvelle analyse sous peu ;
+        // la version du périmètre attend des résultats complets (sinon « +300 rues » à la version suivante)
+        this._relance = setTimeout(() => { if (!this.glisse && this.evt?.centre) this.analyser(); }, RELANCE_CHARGEMENT_MS);
+      } else if (!this.glisse) this._versionner(res);   // pendant le tracé : la version vient au relâchement
     } catch (e) {
       if (n !== this._requete) return;
       const cause = abandon.signal.reason?.message || e.message;
@@ -459,6 +472,10 @@ export class OutilCrise {
       const relancer = el('button', { type: 'button', className: 'sig-bouton sig-bouton--petit', textContent: 'Relancer l’analyse' });
       relancer.addEventListener('click', () => this.analyser());
       return el('div', {}, el('p', { className: 'sig-erreur', textContent: `Analyse impossible : ${this.erreurAnalyse}` }), relancer);
+    }
+    const ch = this.resultat?.chargement || [];
+    if (ch.length) {
+      return el('p', { className: 'sig-info', textContent: `Chargement des données autour du point : ${ch.map((c) => `${c.source.split(' (')[0]} ${c.progression[0]}/${c.progression[1]} carreaux`).join(', ')}…` });
     }
     return null;
   }
@@ -497,7 +514,7 @@ export class OutilCrise {
         exporterGeojson(evt, this.zonesCfg);
       } else {
         await exporterPdf({ evt: { ...evt, auteur: this.auteur }, zonesCfg: this.zonesCfg, statuts: this.statuts,
-          categories: this._pourExport(), sources: this.resultat?.sources || [], anomalies: this.resultat?.anomalies || [],
+          categories: this._pourExport(), mesures: this._mesures(), sources: this.resultat?.sources || [], anomalies: this.resultat?.anomalies || [],
           secours: (this.resultat?.categories || []).filter((k) => k.role === 'secours').flatMap((k) => k.elements.map((e) => ({
             categorie: k.libelle.split(' (')[0], libelle: e.libelle, distance_m: e.distance_m, direction: e.direction,
             couleur: this.categoriesCfg.get(k.id)?.couleur || '#1c3f94' }))),
@@ -553,6 +570,7 @@ export class OutilCrise {
 
   /** Rôle de zone d'un élément : cercles recalculés ici (distance ≤ rayon) ; polygones : dernier calcul du serveur. */
   _zone(e) {
+    if (e.fixe) return this.glisse ? null : e.zone;   // point de bouclage : sur la limite calculée par le serveur
     const zones = this.evt?.zones || [];
     let meilleur = null;
     const garder = (role) => {
@@ -566,12 +584,55 @@ export class OutilCrise {
   _compteurs() {
     const t = new Map();
     for (const k of this.resultat?.categories || []) {
-      if (k.role === 'secours') continue;
+      if (k.role === 'secours' || k.role === 'denombrement') continue;
       const par = new Map(this.roles.map((r) => [r, 0]));
       for (const e of k.elements) { const z = this._zone(e); if (z) par.set(z, par.get(z) + 1); }
       t.set(k.id, par);
     }
     return t;
+  }
+
+  /**
+   * Valeur d'une mesure (habitants, bâtiments…) par rôle de zone. Cercles seuls : lue sur la courbe du serveur
+   * (valeur dans un cercle de rayon r), donc à jour pendant le glissement ; un objet compte dans la zone la plus
+   * grave : zone = cercle de son rôle moins les cercles plus graves. Avec un polygone : calcul exact du serveur.
+   */
+  _mesureParZone(k, m) {
+    const zones = this.evt?.zones || [];
+    if (!m.courbe?.length || zones.some((z) => z.forme !== 'cercle')) return new Map(Object.entries(m.par_zone || {}));
+    const dernier = m.courbe.length - 1;
+    const valeur = (r) => {
+      const i = Math.min(r / k.pas_courbe_m, dernier);
+      const a = Math.floor(i);
+      const b = Math.min(a + 1, dernier);
+      return m.courbe[a] + (m.courbe[b] - m.courbe[a]) * (i - a);
+    };
+    const rayons = new Map();
+    for (const z of zones) rayons.set(z.role, Math.max(rayons.get(z.role) || 0, z.rayon_m));
+    const t = new Map();
+    let deja = 0;
+    for (const r of this.roles) {
+      if (!rayons.has(r)) continue;
+      const R = rayons.get(r);
+      t.set(r, Math.max(0, valeur(R) - valeur(Math.min(deja, R))));
+      deja = Math.max(deja, R);
+    }
+    return t;
+  }
+
+  /** Mesures des dénombrements (bâtiments, population) pour l'affichage et les exports. */
+  _mesures() {
+    const sortie = [];
+    for (const k of this.resultat?.categories || []) {
+      if (k.role !== 'denombrement') continue;
+      if (k.en_cours) { sortie.push({ categorie: k.libelle, libelle: k.libelle, en_cours: true, valeurs: new Map() }); continue; }
+      const hors = (this.evt?.zones || []).some((z) => z.forme === 'cercle' && z.rayon_m > k.rayon_donnees_m);
+      for (const m of k.mesures || []) {
+        sortie.push({ categorie: k.libelle, libelle: m.libelle, arrondi: m.arrondi || 1, sous: /^dont /.test(m.libelle),
+          valeurs: this._mesureParZone(k, m), incomplet: hors, date: k.date_donnee });
+      }
+    }
+    return sortie;
   }
 
   // ------------------------------------------------------------ dessin
@@ -636,6 +697,11 @@ export class OutilCrise {
       rayon: k.role === 'stations' ? 8 : principal ? 6.5 : k.role === 'acces' ? 4 : 4.5 };
     // étiquettes : stations, ouvrages et points de rassemblement (les autres pictogrammes des PLAI : fiche)
     if (k.role === 'stations' || k.role === 'maquettes') p.etiquette = e.libelle;
+    if (k.role === 'rues') p.fin = true;
+    if (k.role === 'bouclage') {
+      p.rayon = 5.5;
+      if (e.ordre != null && e.ordre <= 3) p.etiquette = e.libelle;   // voies principales nommées sur la carte
+    }
     if (k.role === 'plai' && e.type === 'rassemblement') p.etiquette = `${e.inutilisable ? 'INUTILISABLE — ' : ''}Rassemblement ${e.detail || ''}`.trim();
     if (e.inutilisable) p.inutilisable = true;
     const d = this._decision(k, e);
@@ -701,7 +767,8 @@ export class OutilCrise {
       const ajouts = [];
       const retraits = [];
       for (const k of res.categories) {
-        if (k.role === 'secours') continue;
+        // secours : ils suivent le point ; points de bouclage : recalculés sur chaque nouvelle limite (résumés à part)
+        if (['secours', 'bouclage'].includes(k.role)) continue;
         const avant = new Set(prec.touches?.[k.id] || []);
         const apres = new Set(touches[k.id]);
         const plus = [...apres].filter((c) => !avant.has(c));
@@ -709,8 +776,9 @@ export class OutilCrise {
         if (plus.length) ajouts.push({ categorie: k.libelle, noms: plus.map((c) => noms[`${k.id}|${c}`] || c) });
         if (moins.length) retraits.push({ categorie: k.libelle, noms: moins.map((c) => noms[`${k.id}|${c}`] || c) });
       }
+      const bouclage = res.categories.filter((k) => k.role === 'bouclage').map((k) => `${touches[k.id].length} ${k.libelle.toLowerCase()} recalculés`);
       const resume = [...ajouts.map((a) => `+${a.noms.length} ${a.categorie.toLowerCase()}`),
-        ...retraits.map((x) => `-${x.noms.length} ${x.categorie.toLowerCase()}`)].join(', ');
+        ...retraits.map((x) => `-${x.noms.length} ${x.categorie.toLowerCase()}`), ...bouclage].join(', ');
       this.changements = { heure: heure_, resume, ajouts, retraits };
       this._noter('périmètre', `Périmètre modifié : ${description}${resume ? ` (${resume})` : ' (mêmes éléments touchés)'}`);
     } else {
@@ -743,7 +811,7 @@ export class OutilCrise {
   _elementsVivants() {
     const f = [];
     for (const k of this.resultat?.categories || []) {
-      if (k.role === 'lignes' || k.role === 'secours') continue;
+      if (ROLES_SANS_DIRECT.includes(k.role)) continue;
       for (const e of k.elements) {
         const z = this._zone(e);
         if (z) f.push({ type: 'Feature', properties: this._proprietes(k, e, z, 0), geometry: { type: 'Point', coordinates: e.position } });
@@ -765,7 +833,7 @@ export class OutilCrise {
             : e.geometrie.type === 'GeometryCollection' ? e.geometrie.geometries : [e.geometrie];
           for (const g of geoms) f.push({ type: 'Feature', properties: p, geometry: g });
         }
-        if (k.role !== 'lignes') f.push({ type: 'Feature', properties: p, geometry: { type: 'Point', coordinates: e.position } });
+        if (!ROLES_TRACES.includes(k.role)) f.push({ type: 'Feature', properties: p, geometry: { type: 'Point', coordinates: e.position } });
         if (e.remplacement) {
           f.push({ type: 'Feature', properties: { couleur: COULEUR_REMPLACEMENT, rayon: 8, ordre: 9, etiquette: `Rassemblement proposé : ${e.remplacement.libelle}` },
             geometry: { type: 'Point', coordinates: e.remplacement.position } });
@@ -1028,9 +1096,27 @@ export class OutilCrise {
       const zc = this.zonesCfg.get(r);
       return el('th', { title: zc.libelle }, el('span', { className: 'sig-legende__pastille', style: `background:${zc.couleur}` }), ` ${zc.libelle.split(/[ /]/)[0]}`);
     }));
-    const lignes = this.resultat.categories.filter((k) => k.role !== 'secours').map((k) => el('tr', {}, el('th', { scope: 'row', textContent: k.libelle }),
+    const lignes = this.resultat.categories.filter((k) => !['secours', 'denombrement'].includes(k.role)).map((k) => el('tr', {},
+      el('th', { scope: 'row', textContent: k.en_cours ? `${k.libelle} (chargement…)` : k.libelle }),
       ...actifs.map((r) => { const n = t.get(k.id)?.get(r) || 0; return el('td', { className: n ? 'sig-crise-nombre' : 'sig-crise-zero', textContent: n ? String(n) : '—' }); })));
-    return el('table', { className: 'sig-crise-table' }, el('thead', {}, tete), el('tbody', {}, ...lignes));
+    const mesures = this._mesures();
+    if (mesures.length) {
+      lignes.push(el('tr', {}, el('th', { scope: 'row', colSpan: actifs.length + 1, className: 'sig-crise-table__titre', textContent: 'Estimations' })));
+      for (const m of mesures) {
+        lignes.push(el('tr', {}, el('th', { scope: 'row', className: m.sous ? 'sig-crise-table__sous' : '',
+          textContent: m.en_cours ? `${m.libelle} (chargement…)` : `${m.libelle}${m.incomplet ? ' *' : ''}` }),
+        ...actifs.map((r) => {
+          const v = Math.round((m.valeurs.get(r) || 0) / (m.arrondi || 1)) * (m.arrondi || 1);
+          return el('td', { className: v ? 'sig-crise-nombre' : 'sig-crise-zero', textContent: m.en_cours ? '…' : v ? `${m.arrondi > 1 ? '≈ ' : ''}${nf(v)}` : '—' });
+        })));
+      }
+    }
+    const notes = [];
+    if (mesures.some((m) => m.incomplet)) notes.push('* zone plus grande que les données chargées : valeur incomplète (voir les anomalies).');
+    const dates = [...new Set(mesures.map((m) => m.date).filter(Boolean))];
+    if (dates.length) notes.push(`Population : ${dates.join(' ; ')}, au prorata de la surface des carreaux.`);
+    return el('div', {}, el('table', { className: 'sig-crise-table' }, el('thead', {}, tete), el('tbody', {}, ...lignes)),
+      ...notes.map((n) => el('p', { className: 'sig-info', textContent: n })));
   }
 
   _listes() {
@@ -1042,7 +1128,7 @@ export class OutilCrise {
       const items = touches.slice(0, MAX_LISTE).map((e) => this._item(k, e));
       const reste = touches.length - items.length;
       const decides = touches.filter((e) => this._decision(k, e)).length;
-      const ouvert = this._ouvertes?.has(k.id) ?? ['stations', 'plai', 'maquettes', 'lignes'].includes(k.role);
+      const ouvert = this._ouvertes?.has(k.id) ?? ['stations', 'plai', 'maquettes', 'lignes', 'bouclage'].includes(k.role);
       const d = el('details', { className: 'sig-crise-categorie', open: ouvert },
         el('summary', {}, `${k.libelle} (${touches.length}${decides ? ` · ${decides} décidé(s)` : ''})`),
         touches.length ? this._actionMasse(k, touches) : null,

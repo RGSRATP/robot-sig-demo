@@ -153,6 +153,25 @@ export async function exporterPdf(d) {
     doc.text(decides ? String(decides) : '—', x + 44 * echelle + col * roles.length, y);
     y += 4.4 * echelle;
   }
+  const mesures = (d.mesures || []).filter((m) => !m.en_cours);
+  if (mesures.length) {
+    y += 3;
+    titre('Estimations (population, bâtiments)');
+    taille(8);
+    for (const m of mesures) {
+      const vals = roles.map((r) => Math.round((m.valeurs.get(r) || 0) / (m.arrondi || 1)) * (m.arrondi || 1));
+      doc.text(doc.splitTextToSize(`${m.sous ? '  ' : ''}${m.libelle}${m.incomplet ? ' *' : ''}`, 42 * echelle)[0], x, y);
+      vals.forEach((v, i) => doc.text(v ? `${m.arrondi > 1 ? '~' : ''}${nf(v)}` : '—', x + 44 * echelle + col * i, y));
+      y += 4.4 * echelle;
+    }
+    const dates = [...new Set(mesures.map((m) => m.date).filter(Boolean))];
+    taille(7);
+    doc.setTextColor(...GRIS);
+    const note = [dates.length ? `Population : ${dates.join(' ; ')}, au prorata des carreaux.` : '',
+      mesures.some((m) => m.incomplet) ? '* zone plus grande que les données chargées : incomplet.' : ''].filter(Boolean).join(' ');
+    if (note) for (const l of doc.splitTextToSize(note, colonne - 2)) { doc.text(l, x, y); y += 3.4 * echelle; }
+    doc.setTextColor(...ENCRE);
+  }
   if (d.secours?.length) {
     y += 3;
     titre('Secours les plus proches');

@@ -472,6 +472,8 @@ textarea.sig-champ { resize: vertical; margin: 6px 0; }
 .sig-crise-table tbody th { text-align: left; }
 .sig-crise-nombre { font-weight: 700 !important; }
 .sig-crise-zero { color: var(--sig-trait); }
+.sig-crise-table tbody th.sig-crise-table__titre { padding-top: 8px; font-size: 11px; font-weight: 700; color: var(--sig-gris); text-transform: uppercase; letter-spacing: 0.04em; }
+.sig-crise-table tbody th.sig-crise-table__sous { padding-left: 14px; color: var(--sig-gris); }
 .sig-crise-categorie { margin: 0 0 10px; }
 .sig-crise-categorie > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .sig-crise-elements, .sig-crise-liste { list-style: none; margin: 4px 0; padding: 0; }
